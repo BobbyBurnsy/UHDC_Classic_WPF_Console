@@ -251,10 +251,12 @@
             border-top: 1px dashed var(--border-color);
         }
 
-        audio {
+        video {
             width: 100%;
             margin-top: 1rem;
             border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background-color: var(--bg-darker);
         }
 
         /* FOOTER */
@@ -344,15 +346,15 @@
             <img src="uhdc-diagram.png" alt="UHDC Software Workflow Illustration" class="feature-img">
 
             <div class="terminal-box console-font" style="border-left-color: var(--neon-green);">
-                <p style="color: var(--neon-blue);">[UHDC AUDIO TERMINAL] Loading Deep Dive Podcast...</p>
-                <p style="color: var(--text-muted);">> Format: AI-Generated Overview | Status: Ready</p>
+                <p style="color: var(--neon-blue);">[UHDC VIDEO TERMINAL] Loading Setup Guide...</p>
+                <p style="color: var(--text-muted);">> Format: HD Video Walkthrough | Status: Ready</p>
 
                 <div class="podcast-container">
-                    <p class="highlight">Press Play to Initialize Audio Overview:</p>
-                    <audio controls>
-                        <source src="uhdc-podcast.mp3" type="audio/mpeg">
-                        Your browser does not support the audio element.
-                    </audio>
+                    <p class="highlight">Press Play to Initialize Video Overview:</p>
+                    <video controls>
+                        <source src="Unified_Help_Desk_Console.mp4" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
                 </div>
             </div>
         </section>
