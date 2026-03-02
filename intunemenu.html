@@ -242,7 +242,7 @@
 
         <section>
             <h2 class="console-font">IT Pro Summary</h2>
-            <p>This is a localized graphical overlay for Microsoft Intune and Entra ID (Azure AD) administration. It leverages the Microsoft Graph API to provide Tier 1 technicians with a highly restrictive, contextual GUI for performing common device and identity actions. It is designed specifically to accelerate live phone support by eliminating the need to navigate slow, complex Microsoft Endpoint Manager web portals while a user is waiting on hold.</p>
+            <p>This is a localized graphical overlay for Microsoft Intune and Entra ID (Azure AD) administration. It leverages the Microsoft Graph API to provide Tier 1 technicians with a highly restrictive, contextual GUI for performing common device and identity actions. Operating strictly on <strong>Delegated Permissions</strong> through the technician's active Entra login session, the tool guarantees that it cannot grant technicians any access, rights, or capabilities they do not already natively possess within the tenant. It is designed specifically to accelerate live phone support by eliminating the need to navigate slow, complex Microsoft Endpoint Manager web portals while a user is waiting on hold.</p>
         </section>
 
         <section>
@@ -296,7 +296,7 @@
             <h2 class="console-font">Technical Execution Pipeline</h2>
             <ol>
                 <li><strong>Dynamic Domain Filtration (LDAP):</strong> Extracts the User Principal Name (UPN) of the currently logged-in technician via a local <code>Get-ADUser</code> query (<strong>Port 389/LDAP</strong>). It splits the UPN to capture the domain suffix and concatenates it to the target user's SAMAccountName. This prevents cross-tenant data leakage by mathematically restricting the Azure search to the technician's specific organizational unit.</li>
-                <li><strong>Graph API Authentication (HTTPS):</strong> Uses the <code>Microsoft.Graph</code> PowerShell module to silently authenticate to Entra ID over <strong>Port 443 (HTTPS)</strong>. It requests a strictly defined array of administrative scopes required to execute the actions. </li>
+                <li><strong>Graph API Authentication (HTTPS):</strong> Uses the <code>Microsoft.Graph</code> PowerShell module to silently authenticate to Entra ID over <strong>Port 443 (HTTPS)</strong> leveraging the technician's active login session. It requests a strictly defined array of Delegated Permissions (scopes) required to execute the actions, ensuring all Graph calls are bound by the user's native RBAC limits.</li>
                 <li><strong>Dual-Vector Device Enumeration:</strong> Performs two parallel queries against Graph API. First, it queries <code>Get-MgDeviceManagementManagedDevice</code> using the computer hostname string. Second, it resolves the user's Entra ID Object GUID and performs a reverse-lookup to find all mobile devices explicitly assigned to that user. The arrays are merged, deduplicated, and passed to the WPF XAML interface.</li>
                 <li><strong>Context-Aware XAML UI:</strong> Renders a WPF GUI that dynamically hides or shows administrative buttons based on the target OS. (e.g., The "Remote Wipe" and "Remove Passcode" buttons only populate if the selected list item is evaluated as iOS/Android).</li>
                 <li><strong>REST API Dispatching:</strong> When a button is clicked, it dispatches the corresponding Graph API command back over <strong>Port 443</strong> directly to Microsoft's cloud infrastructure.</li>
@@ -308,7 +308,7 @@
 
             <div class="qa-block">
                 <div class="qa-question">Q: Do technicians need to be global administrators in Entra ID to use this tool?</div>
-                <div class="qa-answer">No. Because the script relies on the <code>Connect-MgGraph</code> module, it passes the technician's currently logged-in Windows credentials to Azure via pass-through authentication. Microsoft Graph then evaluates their specific Role-Based Access Control (RBAC) permissions. If a Tier 1 tech doesn't have the Intune rights to remote wipe a phone, the button click will simply return an "Insufficient Permissions" error to the GUI.</div>
+                <div class="qa-answer">No. Because the script relies on the <code>Connect-MgGraph</code> module, it passes the technician's currently logged-in Windows credentials to Azure via pass-through authentication. Operating on <strong>Delegated Permissions</strong>, Microsoft Graph evaluates their specific Role-Based Access Control (RBAC) rights. If a Tier 1 tech doesn't have the Intune rights to remote wipe a phone, the button click will simply return an "Insufficient Permissions" error to the GUI.</div>
             </div>
 
             <div class="qa-block">
