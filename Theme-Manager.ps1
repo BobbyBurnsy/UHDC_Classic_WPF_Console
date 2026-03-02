@@ -13,10 +13,11 @@ Add-Type -AssemblyName PresentationFramework
 # THEME DICTIONARY (Must use 6 UNIQUE hex codes per theme to prevent regex collisions)
 # ------------------------------------------------------------------
 $Themes = [ordered]@{
-    "Seahawks (Default)" = @{ BG_Main="#1E1E1E"; BG_Sec="#111111"; BG_Con="#0C0C0C"; BG_Btn="#2D2D30"; Acc_Pri="#00A2ED"; Acc_Sec="#00FF00" }
-    "Cyberpunk 2077"     = @{ BG_Main="#0D0208"; BG_Sec="#000000"; BG_Con="#050104"; BG_Btn="#1A0510"; Acc_Pri="#00F0FF"; Acc_Sec="#FF003C" }
+    "PNW (Default)"      = @{ BG_Main="#1E1E1E"; BG_Sec="#111111"; BG_Con="#0C0C0C"; BG_Btn="#2D2D30"; Acc_Pri="#00A2ED"; Acc_Sec="#00FF00" }
+    "Maritime Retro"     = @{ BG_Main="#0C2340"; BG_Sec="#071526"; BG_Con="#030A13"; BG_Btn="#113159"; Acc_Pri="#FFC425"; Acc_Sec="#00A6CE" }
+    "Cyberpunk"          = @{ BG_Main="#0D0208"; BG_Sec="#000000"; BG_Con="#050104"; BG_Btn="#1A0510"; Acc_Pri="#00F0FF"; Acc_Sec="#FF003C" }
     "Dracula"            = @{ BG_Main="#282A36"; BG_Sec="#1E1F29"; BG_Con="#191A21"; BG_Btn="#44475A"; Acc_Pri="#BD93F9"; Acc_Sec="#50FA7B" }
-    "The Matrix"         = @{ BG_Main="#000000"; BG_Sec="#010101"; BG_Con="#020202"; BG_Btn="#0D0D0D"; Acc_Pri="#00FF41"; Acc_Sec="#00FF42" }
+    "Mainframe"          = @{ BG_Main="#050F05"; BG_Sec="#020802"; BG_Con="#010401"; BG_Btn="#0A1A0A"; Acc_Pri="#00FF41"; Acc_Sec="#00FF42" }
     "Solarized Dark"     = @{ BG_Main="#002B36"; BG_Sec="#073642"; BG_Con="#001E26"; BG_Btn="#083642"; Acc_Pri="#268BD2"; Acc_Sec="#2AA198" }
     "Blood Moon"         = @{ BG_Main="#1A0000"; BG_Sec="#0D0000"; BG_Con="#050000"; BG_Btn="#260000"; Acc_Pri="#FF3333"; Acc_Sec="#FF8800" }
     "Deep Ocean"         = @{ BG_Main="#0F172A"; BG_Sec="#080C17"; BG_Con="#04060C"; BG_Btn="#1E293B"; Acc_Pri="#38BDF8"; Acc_Sec="#34D399" }
