@@ -20,7 +20,7 @@ In no event shall the author or contributors be liable for any direct, indirect,
 ## 📜 License & Attribution
 The WPF version of the Unified Help Desk Console is **100% Freeware**. You are free to deploy, modify, and use this tool within your organization without any cost. 
 
-**Attribution Requirement:** If you borrow, fork, or adapt any scripts, XAML layouts, or underlying code from this project for your own tools, you **must** provide explicit credit to **Bobby Burns** in your documentation and source code.
+**Attribution Requirement:** If you borrow, fork, or adapt any scripts, XAML layouts, or underlying code from this project for your own tools, you **must** provide explicit credit to **Bobby Burns** and a link to **www.github.com/bobbyburnsy** in your documentation and source code.
 
 ---
 
