@@ -3,6 +3,7 @@
 # Shutdown, Logoff) to a remote target. It utilizes PsExec to execute native
 # shutdown.exe commands locally on the target, effectively bypassing common WMI
 # and RPC firewall blocks.
+# Optimized for PS 5.1 (WPF Dialog Fix, Base64 Themes, .NET Ping).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -12,7 +13,10 @@ param(
     [string]$SharedRoot,
 
     [Parameter(Mandatory=$false)]
-    [hashtable]$SyncHash
+    [hashtable]$SyncHash,
+
+    [Parameter(Mandatory=$false)]
+    [string]$ThemeB64
 )
 
 # --- TRAINING MODE HELPER (WPF Safe) ---
@@ -56,44 +60,76 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     } catch { }
 }
 
+# ------------------------------------------------------------------
+# THEME ENGINE INTEGRATION (Base64 Decoding for PS 5.1 Safety)
+# ------------------------------------------------------------------
+$ActiveColors = @{
+    BG_Main = "#1E1E1E"; BG_Sec  = "#111111"; BG_Con  = "#0C0C0C"
+    BG_Btn  = "#2D2D30"; Acc_Pri = "#00A2ED"; Acc_Sec = "#00FF00"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
+    try {
+        $ThemeBytes = [Convert]::FromBase64String($ThemeB64)
+        $ThemeJson = [System.Text.Encoding]::UTF8.GetString($ThemeBytes)
+        $parsed = $ThemeJson | ConvertFrom-Json
+
+        $ActiveColors.BG_Main = $parsed.BG_Main
+        $ActiveColors.BG_Sec  = $parsed.BG_Sec
+        $ActiveColors.BG_Con  = $parsed.BG_Con
+        $ActiveColors.BG_Btn  = $parsed.BG_Btn
+        $ActiveColors.Acc_Pri = $parsed.Acc_Pri
+        $ActiveColors.Acc_Sec = $parsed.Acc_Sec
+    } catch {}
+}
+
 Add-Type -AssemblyName PresentationFramework
 
 # ------------------------------------------------------------------
-# CUSTOM DARK THEMED INPUT BOX FUNCTION
+# CUSTOM THEMED INPUT BOX FUNCTION (PS 5.1 WPF Fix)
 # ------------------------------------------------------------------
 function Show-DarkInputBox {
     param([string]$Title, [string]$Prompt, [string]$DefaultText = "")
 
     [xml]$InputXAML = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Title="$Title" SizeToContent="Height" Width="450" Background="#1E1E1E" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
+            Title="$Title" SizeToContent="Height" Width="450" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
         <StackPanel Margin="15">
             <TextBlock Text="$Prompt" Foreground="White" FontSize="14" Margin="0,0,0,10" TextWrapping="Wrap"/>
-            <TextBox Name="InputBox" Text="$DefaultText" Background="#333333" Foreground="#00A2ED" FontSize="14" Height="28" Padding="4" BorderBrush="#555"/>
+            <TextBox Name="InputBox" Text="$DefaultText" Background="%%BG_CON%%" Foreground="%%ACC_SEC%%" FontSize="14" Height="28" Padding="4" BorderBrush="#555"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,15,0,0">
-                <Button Name="BtnCancel" Content="Cancel" Width="80" Height="30" Margin="0,0,10,0" Background="#444" Foreground="White" Cursor="Hand" BorderThickness="0"/>
-                <Button Name="BtnOK" Content="OK" Width="80" Height="30" Background="#00A2ED" Foreground="White" Cursor="Hand" BorderThickness="0" FontWeight="Bold"/>
+                <Button Name="BtnCancel" Content="Cancel" Width="80" Height="30" Margin="0,0,10,0" Background="%%BG_BTN%%" Foreground="White" Cursor="Hand" BorderThickness="0" IsCancel="True"/>
+                <Button Name="BtnOK" Content="OK" Width="80" Height="30" Background="%%ACC_PRI%%" Foreground="%%BG_MAIN%%" Cursor="Hand" BorderThickness="0" FontWeight="Bold" IsDefault="True"/>
             </StackPanel>
         </StackPanel>
     </Window>
 "@
+    # Inject Theme Colors
+    $InputXAML = $InputXAML -replace '%%BG_MAIN%%', $ActiveColors.BG_Main
+    $InputXAML = $InputXAML -replace '%%BG_CON%%', $ActiveColors.BG_Con
+    $InputXAML = $InputXAML -replace '%%BG_BTN%%', $ActiveColors.BG_Btn
+    $InputXAML = $InputXAML -replace '%%ACC_PRI%%', $ActiveColors.Acc_Pri
+    $InputXAML = $InputXAML -replace '%%ACC_SEC%%', $ActiveColors.Acc_Sec
+
     $Reader = (New-Object System.Xml.XmlNodeReader $InputXAML)
     $InputWin = [Windows.Markup.XamlReader]::Load($Reader)
 
     $InputBox = $InputWin.FindName("InputBox")
     $BtnOK = $InputWin.FindName("BtnOK")
-    $BtnCancel = $InputWin.FindName("BtnCancel")
 
-    $Result = $null
-
-    $BtnOK.Add_Click({
-        $script:Result = $InputBox.Text
-        $InputWin.Close()
+    $InputWin.Add_Loaded({
+        $InputBox.Focus()
+        $InputBox.SelectAll()
     })
-    $BtnCancel.Add_Click({ $InputWin.Close() })
 
-    $InputWin.ShowDialog() | Out-Null
-    return $Result
+    $BtnOK.Add_Click({ 
+        $InputWin.DialogResult = $true 
+    })
+
+    if ($InputWin.ShowDialog() -eq $true) {
+        return $InputBox.Text
+    }
+    return $null
 }
 
 # ------------------------------------------------------------------
@@ -112,8 +148,14 @@ Write-Host "========================================================"
 Write-Host " [UHDC] POWER CONTROLS: $Target"
 Write-Host "========================================================"
 
-# Fast Ping Test
-if (-not (Test-Connection -ComputerName $Target -Count 1 -Quiet)) {
+# Fast Ping Test (.NET Ping for PS 5.1 Safety)
+$pingSender = New-Object System.Net.NetworkInformation.Ping
+try {
+    if ($pingSender.Send($Target, 1000).Status -ne "Success") {
+        Write-Host " [UHDC] [!] Offline. $Target is not responding to ping." -ForegroundColor Red
+        return
+    }
+} catch {
     Write-Host " [UHDC] [!] Offline. $Target is not responding to ping." -ForegroundColor Red
     return
 }
@@ -141,11 +183,11 @@ $MenuOptions = @(
 Write-Host " [UHDC] >>> Opening Graphical Power Menu..." -ForegroundColor Cyan
 
 # ------------------------------------------------------------------
-# CUSTOM DARK THEMED SELECTION MENU
+# CUSTOM THEMED SELECTION MENU
 # ------------------------------------------------------------------
 [xml]$MenuXAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        Title="UHDC: Power Controls - $Target" Height="350" Width="650" Background="#1E1E1E" WindowStartupLocation="CenterScreen" Topmost="True">
+        Title="UHDC: Power Controls - $Target" Height="350" Width="650" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen" Topmost="True">
     <Grid Margin="15">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -153,9 +195,9 @@ Write-Host " [UHDC] >>> Opening Graphical Power Menu..." -ForegroundColor Cyan
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Text="Select Power Action for $Target" Foreground="#00A2ED" FontSize="18" FontWeight="Bold" Margin="0,0,0,10"/>
+        <TextBlock Text="Select Power Action for $Target" Foreground="%%ACC_PRI%%" FontSize="18" FontWeight="Bold" Margin="0,0,0,10"/>
 
-        <ListView Name="ActionList" Grid.Row="1" Background="#2D2D30" Foreground="White" BorderBrush="#555" FontSize="14" Margin="0,0,0,15">
+        <ListView Name="ActionList" Grid.Row="1" Background="%%BG_SEC%%" Foreground="White" BorderBrush="#555" FontSize="14" Margin="0,0,0,15">
             <ListView.View>
                 <GridView>
                     <GridViewColumn Header="Action" DisplayMemberBinding="{Binding Action}" Width="150"/>
@@ -165,19 +207,24 @@ Write-Host " [UHDC] >>> Opening Graphical Power Menu..." -ForegroundColor Cyan
         </ListView>
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Name="BtnCancel" Content="Cancel" Width="100" Height="35" Margin="0,0,10,0" Background="#444" Foreground="White" Cursor="Hand" BorderThickness="0"/>
-            <Button Name="BtnExecute" Content="Execute Command" Width="140" Height="35" Background="#DC3545" Foreground="White" Cursor="Hand" BorderThickness="0" FontWeight="Bold"/>
+            <Button Name="BtnCancel" Content="Cancel" Width="100" Height="35" Margin="0,0,10,0" Background="%%BG_BTN%%" Foreground="White" Cursor="Hand" BorderThickness="0" IsCancel="True"/>
+            <Button Name="BtnExecute" Content="Execute Command" Width="140" Height="35" Background="#DC3545" Foreground="White" Cursor="Hand" BorderThickness="0" FontWeight="Bold" IsDefault="True"/>
         </StackPanel>
     </Grid>
 </Window>
 "@
+
+# Inject Theme Colors
+$MenuXAML = $MenuXAML -replace '%%BG_MAIN%%', $ActiveColors.BG_Main
+$MenuXAML = $MenuXAML -replace '%%BG_SEC%%', $ActiveColors.BG_Sec
+$MenuXAML = $MenuXAML -replace '%%BG_BTN%%', $ActiveColors.BG_Btn
+$MenuXAML = $MenuXAML -replace '%%ACC_PRI%%', $ActiveColors.Acc_Pri
 
 $MenuReader = (New-Object System.Xml.XmlNodeReader $MenuXAML)
 $MenuWin = [Windows.Markup.XamlReader]::Load($MenuReader)
 
 $ActionList = $MenuWin.FindName("ActionList")
 $BtnExecute = $MenuWin.FindName("BtnExecute")
-$BtnCancel = $MenuWin.FindName("BtnCancel")
 
 foreach ($item in $MenuOptions) { $ActionList.Items.Add($item) | Out-Null }
 
@@ -186,17 +233,13 @@ $Selection = $null
 $BtnExecute.Add_Click({
     if ($ActionList.SelectedItem) {
         $script:Selection = $ActionList.SelectedItem
-        $MenuWin.Close()
+        $MenuWin.DialogResult = $true
     } else {
         [System.Windows.MessageBox]::Show("Please select an action from the list.", "Selection Required", "OK", "Warning")
     }
 })
 
-$BtnCancel.Add_Click({ $MenuWin.Close() })
-
-$MenuWin.ShowDialog() | Out-Null
-
-if (-not $Selection) {
+if ($MenuWin.ShowDialog() -ne $true -or -not $Selection) {
     Write-Host " [UHDC] [i] Power action cancelled." -ForegroundColor DarkGray
     return
 }

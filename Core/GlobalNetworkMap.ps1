@@ -2,9 +2,8 @@
 # DESCRIPTION: A powerful background scanner that compiles a master map of
 # User-to-Computer relationships. It scans Active Directory for all enabled
 # Windows 10/11 workstations, pings them to check availability, and queries
-# the currently logged-on user. It updates the central 'UserHistory.json'
-# database in "Additive Mode," ensuring that new detections are added without
-# overwriting existing history for users who utilize multiple devices.
+# the currently logged-on user. 
+# Optimized for PS 5.1 (.NET Ping & JSON Array Protection).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -17,7 +16,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER ---
+# --- TRAINING MODE HELPER (WPF Safe) ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -27,7 +26,13 @@ function Wait-TrainingStep {
         $SyncHash.StepAck = $false
 
         # Pause the script until the GUI user clicks Execute or Abort
-        while (-not $SyncHash.StepAck) { Start-Sleep -Milliseconds 200 }
+        while (-not $SyncHash.StepAck) { 
+            Start-Sleep -Milliseconds 200 
+            $Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+            if ($Dispatcher) {
+                $Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+            }
+        }
 
         if (-not $SyncHash.StepResult) {
             throw "Execution aborted by user during Training Mode."
@@ -130,7 +135,7 @@ Write-Host " [UHDC] [OK] Found $total target workstations."
 Start-Sleep 2
 
 # ==============================================================================
-# 3. SCAN LOOP
+# 3. SCAN LOOP (PS 5.1 .NET Ping Optimization)
 # ==============================================================================
 $count = 0
 $newFinds = 0
@@ -138,14 +143,21 @@ $updatedFinds = 0
 
 Wait-TrainingStep `
     -Desc "STEP 3: PING SWEEP & WMI USER QUERY`n`nWHAT IT DOES:`nFor every computer found in AD, we send a fast ping. If it responds, we establish a WMI connection to query the 'Win32_ComputerSystem' class and extract the 'UserName' property to see who is currently logged in. We then update their 'LastSeen' timestamp in our memory dictionary.`n`nIN-PERSON EQUIVALENT:`nWalking the floor, going desk to desk, wiggling the mouse on every active computer, and writing down the username displayed on the lock screen." `
-    -Code "if (Test-Connection -ComputerName `$pc -Count 1 -Quiet) {`n    `$compInfo = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName `$pc`n    `$rawUser = `$compInfo.UserName`n}"
+    -Code "`$ping = New-Object System.Net.NetworkInformation.Ping`nif (`$ping.Send(`$pc, 500).Status -eq 'Success') {`n    `$compInfo = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName `$pc`n    `$rawUser = `$compInfo.UserName`n}"
+
+$pingSender = New-Object System.Net.NetworkInformation.Ping
 
 foreach ($pc in $computers) {
     $count++
     $percent = "{0:N0}" -f (($count / $total) * 100)
 
-    # Fast Ping Test
-    if (Test-Connection -ComputerName $pc -Count 1 -Quiet) {
+    # Fast Ping Test (.NET class prevents PS 5.1 WMI terminating errors)
+    $isOnline = $false
+    try {
+        if ($pingSender.Send($pc, 500).Status -eq "Success") { $isOnline = $true }
+    } catch {}
+
+    if ($isOnline) {
         try {
             # Quick WMI Query
             $compInfo = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName $pc -ErrorAction Stop
@@ -186,6 +198,11 @@ foreach ($pc in $computers) {
                 $finalList = @($masterDB.Values | Sort-Object User)
                 $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
 
+                # PS 5.1 Single-Item Array Protection
+                if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+                    $jsonOutput = "[$jsonOutput]"
+                }
+
                 if (-not [string]::IsNullOrWhiteSpace($jsonOutput)) {
                     Set-Content -Path $TempFile -Value $jsonOutput -Force -ErrorAction Stop
                     Move-Item -Path $TempFile -Destination $HistoryFile -Force -ErrorAction Stop
@@ -211,6 +228,12 @@ if ($masterDB.Count -ge $initialCount -and $masterDB.Count -gt 0) {
 
         # 1. Convert to JSON in memory first
         $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
+
+        # PS 5.1 Single-Item Array Protection
+        if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+            $jsonOutput = "[$jsonOutput]"
+        }
+
         if ([string]::IsNullOrWhiteSpace($jsonOutput)) { throw "Generated JSON string was completely empty." }
 
         # 2. Write to Temp file

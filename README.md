@@ -76,7 +76,7 @@ Windows blocks PowerShell scripts downloaded from the internet by default, and t
 
 ## ⚖️ Licensing & Commercial Terms
 
-UHDC is distributed under a tiered "Site License" model. One license covers your entire organization (unlimited technicians).
+ UHDC WPF is distributed under a tiered "Site License" model. One license covers your entire organization (unlimited technicians).
 
 | Tier | Managed Endpoints | Annual Site License |
 | :--- | :--- | :--- |

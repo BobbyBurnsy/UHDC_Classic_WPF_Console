@@ -1,8 +1,9 @@
 # Get-EventLogs.ps1 - Place this script in the \Tools folder
 # DESCRIPTION: Remotely queries the System and Application event logs.
-# If no keyword is provided, it pulls the last 5 Critical/Error events.
+# If no keyword is provided, it pulls the last 50 Critical/Error events.
 # If a keyword is provided, it deep-scans the last 10,000 events for matches.
 # Results are exported to a local CSV in C:\UHDC\Logs and previewed in the console.
+# Optimized for PS 5.1 (WinRM Pipeline Offloading & .NET Ping).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -18,7 +19,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER ---
+# --- TRAINING MODE HELPER (WPF Safe) ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -28,7 +29,13 @@ function Wait-TrainingStep {
         $SyncHash.StepAck = $false
 
         # Pause the script until the GUI user clicks Execute or Abort
-        while (-not $SyncHash.StepAck) { Start-Sleep -Milliseconds 200 }
+        while (-not $SyncHash.StepAck) { 
+            Start-Sleep -Milliseconds 200 
+            $Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+            if ($Dispatcher) {
+                $Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+            }
+        }
 
         if (-not $SyncHash.StepResult) {
             throw "Execution aborted by user during Training Mode."
@@ -59,6 +66,20 @@ Write-Host "========================================"
 Write-Host " [UHDC] REMOTE EVENT LOG DIAGNOSTICS"
 Write-Host "========================================"
 
+# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+$pingSender = New-Object System.Net.NetworkInformation.Ping
+try {
+    if ($pingSender.Send($Target, 1000).Status -ne "Success") {
+        Write-Host " [UHDC] [!] Offline. $Target is not responding to ping."
+        Write-Host "========================================`n"
+        return
+    }
+} catch {
+    Write-Host " [UHDC] [!] Offline. $Target is not responding to ping."
+    Write-Host "========================================`n"
+    return
+}
+
 # Define local export directory (Branded for UHDC)
 $LocalTemp = "C:\UHDC\Logs"
 if (-not (Test-Path $LocalTemp)) {
@@ -71,26 +92,32 @@ $ExportPath = "$LocalTemp\EventLogs_$Target_$Timestamp.csv"
 
 try {
     # ------------------------------------------------------------------
-    # STEP 1: QUERY EVENT LOGS
+    # STEP 1: QUERY EVENT LOGS (WinRM Offloaded)
     # ------------------------------------------------------------------
     if ([string]::IsNullOrWhiteSpace($Keyword)) {
 
         Wait-TrainingStep `
-            -Desc "STEP 1: QUERY CRITICAL & ERROR LOGS`n`nWHEN TO USE THIS:`nUse this when a user reports unexpected reboots (BSODs), system hangs, or general instability, but doesn't have a specific error code.`n`nWHAT IT DOES:`nWe are using the 'Get-WinEvent' cmdlet to remotely query the target's System and Application logs. Since no keyword was provided, we are filtering specifically for Level 1 (Critical) and Level 2 (Error) events, pulling the 5 most recent occurrences.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), expand 'Windows Logs', select 'System', click 'Filter Current Log' on the right pane, and check the boxes for 'Critical' and 'Error'." `
-            -Code "Get-WinEvent -ComputerName $Target -FilterHashtable @{LogName=@('System','Application'); Level=@(1,2)} -MaxEvents 5"
+            -Desc "STEP 1: QUERY CRITICAL & ERROR LOGS`n`nWHEN TO USE THIS:`nUse this when a user reports unexpected reboots (BSODs), system hangs, or general instability, but doesn't have a specific error code.`n`nWHAT IT DOES:`nWe are using 'Invoke-Command' to run 'Get-WinEvent' directly on the target's CPU. We filter specifically for Level 1 (Critical) and Level 2 (Error) events, pulling the 50 most recent occurrences, and returning them over the network.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), expand 'Windows Logs', select 'System', click 'Filter Current Log' on the right pane, and check the boxes for 'Critical' and 'Error'." `
+            -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-WinEvent -FilterHashtable @{LogName=@('System','Application'); Level=@(1,2)} -MaxEvents 5 }"
 
-        Write-Host "  > [1/2] Pulling last 5 Critical/Error logs from System & Application..."
-        $logs = Get-WinEvent -ComputerName $Target -FilterHashtable @{LogName=@('System','Application'); Level=@(1,2)} -MaxEvents 5 -ErrorAction Stop
+        Write-Host "  > [1/2] Pulling last 50 Critical/Error logs from System & Application..."
+        $logs = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
+            Get-WinEvent -FilterHashtable @{LogName=@('System','Application'); Level=@(1,2)} -MaxEvents 50 -ErrorAction SilentlyContinue
+        }
     } else {
 
         Wait-TrainingStep `
-            -Desc "STEP 1: DEEP SCAN FOR KEYWORD`n`nWHEN TO USE THIS:`nUse this when troubleshooting a specific failing application (e.g., 'Outlook', 'Teams') or a specific error code provided by the user.`n`nWHAT IT DOES:`nWe are using 'Get-WinEvent' to pull the last 10,000 events from the System and Application logs, and then piping them into a 'Where-Object' filter to find exact matches for your keyword in either the Message body or the Provider Name.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), select the 'Application' log, click 'Find...' on the right pane, type your keyword, and click 'Find Next' repeatedly." `
-            -Code "Get-WinEvent -ComputerName $Target -LogName 'System','Application' -MaxEvents 10000 | Where-Object { `$_.Message -match '$Keyword' -or `$_.ProviderName -match '$Keyword' }"
+            -Desc "STEP 1: DEEP SCAN FOR KEYWORD`n`nWHEN TO USE THIS:`nUse this when troubleshooting a specific failing application (e.g., 'Outlook', 'Teams') or a specific error code provided by the user.`n`nWHAT IT DOES:`nIn PowerShell 5.1, pulling 10,000 events over the network and filtering them locally will freeze the console. Instead, we use 'Invoke-Command' to force the target PC to pull the 10,000 events, filter them locally using 'Where-Object', and only send the matching results back to us.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), select the 'Application' log, click 'Find...' on the right pane, type your keyword, and click 'Find Next' repeatedly." `
+            -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-WinEvent -LogName 'System','Application' -MaxEvents 10000 | Where-Object { `$_.Message -match `$using:Keyword -or `$_.ProviderName -match `$using:Keyword } }"
 
         Write-Host "  > [1/2] Deep searching last 10,000 events for keyword: '$Keyword'..."
-        Write-Host "    (This may take a moment to filter...)"
-        $logs = Get-WinEvent -ComputerName $Target -LogName 'System','Application' -MaxEvents 10000 -ErrorAction Stop |
-                Where-Object { $_.Message -match $Keyword -or $_.ProviderName -match $Keyword }
+        Write-Host "    (Offloading query to target CPU... Please wait...)"
+
+        # The $using: scope modifier allows us to pass the local $Keyword variable into the remote runspace
+        $logs = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
+            Get-WinEvent -LogName 'System','Application' -MaxEvents 10000 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match $using:Keyword -or $_.ProviderName -match $using:Keyword }
+        }
     }
 
     if ($null -ne $logs -and $logs.Count -gt 0) {
@@ -118,8 +145,9 @@ try {
         $consoleLogs = $logs | Select-Object -First 15
         foreach ($log in $consoleLogs) {
             Write-Host "  [$($log.TimeCreated)] [$($log.LevelDisplayName)] $($log.ProviderName)"
-            # This strips out crazy line breaks so it fits nicely in your console HUD
-            $msg = $log.Message.Replace("`r`n", " ").Replace("`n", " ")
+
+            # Safely handle empty messages
+            $msg = if ($log.Message) { $log.Message.Replace("`r`n", " ").Replace("`n", " ") } else { "No message data." }
             if ($msg.Length -gt 150) { $msg = $msg.Substring(0, 147) + "..." }
             Write-Host "  > $msg`n"
         }

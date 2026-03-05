@@ -3,14 +3,15 @@
 # finding and deleting a specific User-to-PC mapping. This is used by the 
 # GUI's "Rem PC" button to prune stale or incorrect location data while 
 # leaving the rest of the database intact.
+# Optimized for PS 5.1 (JSON Array Protection).
 
 param(
     [Parameter(Mandatory=$false)]
     [string]$User,
-    
+
     [Parameter(Mandatory=$false)]
     [string]$Computer,
-    
+
     [Parameter(Mandatory=$false)]
     [string]$SharedRoot
 )
@@ -23,7 +24,7 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
         $RootFolder = Split-Path -Path $ScriptDir
         $ConfigFile = Join-Path -Path $RootFolder -ChildPath "config.json"
-        
+
         if (Test-Path $ConfigFile) {
             $Config = Get-Content $ConfigFile -Raw | ConvertFrom-Json
             $SharedRoot = $Config.SharedNetworkRoot
@@ -51,13 +52,13 @@ if (Test-Path $HistoryFile) {
     if ((Get-Item $HistoryFile).Length -gt 100) {
         Copy-Item -Path $HistoryFile -Destination $BackupFile -Force
     }
-    
+
     try {
         $content = Get-Content $HistoryFile -Raw -ErrorAction Stop
         if (-not [string]::IsNullOrWhiteSpace($content)) {
             $raw = $content | ConvertFrom-Json
             if ($raw -isnot [System.Array]) { $raw = @($raw) }
-            
+
             foreach ($entry in $raw) {
                 if ($entry.User -and $entry.Computer) {
                     $key = "$($entry.User)-$($entry.Computer)"
@@ -89,20 +90,25 @@ if ($db.ContainsKey($scanKey)) {
 if ($db.Count -eq $expectedCount -and $initialCount -gt 0) {
     try {
         $finalList = @($db.Values | Sort-Object User)
-        
+
         # STEP A: Convert to JSON *in memory* first. 
         $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
-        
+
+        # PS 5.1 Single-Item Array Protection
+        if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+            $jsonOutput = "[$jsonOutput]"
+        }
+
         if ([string]::IsNullOrWhiteSpace($jsonOutput)) {
             throw "Generated JSON string was completely empty."
         }
-        
+
         # STEP B: Write to a temporary file.
         Set-Content -Path $TempFile -Value $jsonOutput -Force -ErrorAction Stop
-        
+
         # STEP C: Atomic Swap. Instantly replace the live file.
         Move-Item -Path $TempFile -Destination $HistoryFile -Force -ErrorAction Stop
-        
+
     } catch {
         Write-Host "`n [UHDC] [!] ERROR SAVING: $($_.Exception.Message)" -ForegroundColor Red
         if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }

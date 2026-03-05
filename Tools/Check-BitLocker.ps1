@@ -1,7 +1,8 @@
-# Check-Bitlocker.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Remotely queries the target computer via WinRM to retrieve
-# the BitLocker encryption status for all connected volumes. Displays the
-# Mount Point, Volume Status, Protection Status, Encryption Method, and Key Protectors.
+# Check-BitLocker.ps1 - Place this script in the \Tools folder
+# DESCRIPTION: Remotely queries the target computer to retrieve the BitLocker 
+# encryption status for all connected volumes. Features an automated PsExec 
+# fallback using 'manage-bde' if WinRM is blocked by the Windows Firewall.
+# Optimized for PS 5.1 (.NET Ping, WPF Training Mode Fix, & PsExec Fallback).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -14,7 +15,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER ---
+# --- TRAINING MODE HELPER (WPF Safe) ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -24,7 +25,13 @@ function Wait-TrainingStep {
         $SyncHash.StepAck = $false
 
         # Pause the script until the GUI user clicks Execute or Abort
-        while (-not $SyncHash.StepAck) { Start-Sleep -Milliseconds 200 }
+        while (-not $SyncHash.StepAck) { 
+            Start-Sleep -Milliseconds 200 
+            $Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+            if ($Dispatcher) {
+                $Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+            }
+        }
 
         if (-not $SyncHash.StepResult) {
             throw "Execution aborted by user during Training Mode."
@@ -55,8 +62,15 @@ Write-Host "========================================"
 Write-Host " [UHDC] BITLOCKER STATUS UTILITY"
 Write-Host "========================================"
 
-# 1. Fast Ping Check
-if (-not (Test-Connection -ComputerName $Target -Count 1 -Quiet)) {
+# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+$pingSender = New-Object System.Net.NetworkInformation.Ping
+try {
+    if ($pingSender.Send($Target, 1000).Status -ne "Success") {
+        Write-Host " [UHDC] [!] Offline. $Target is not responding to ping."
+        Write-Host "========================================`n"
+        return
+    }
+} catch {
     Write-Host " [UHDC] [!] Offline. $Target is not responding to ping."
     Write-Host "========================================`n"
     return
@@ -66,9 +80,12 @@ if (-not (Test-Connection -ComputerName $Target -Count 1 -Quiet)) {
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
+    # ------------------------------------------------------------------
+    # STEP 1: QUERY BITLOCKER STATUS (WinRM)
+    # ------------------------------------------------------------------
     Wait-TrainingStep `
-        -Desc "STEP 1: QUERY BITLOCKER STATUS`n`nWe are establishing a remote WinRM session to query the target's BitLocker management interface. This will retrieve the encryption status, protection state, and active key protectors (like TPM or Numerical Passwords) for all mounted volumes.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open an elevated Command Prompt and type 'manage-bde -status', or navigate to 'Control Panel > System and Security > BitLocker Drive Encryption' to view the drive status." `
-        -Code "Invoke-Command -ComputerName $Target -ScriptBlock { Get-BitLockerVolume | Select-Object MountPoint, VolumeStatus, ProtectionStatus, EncryptionMethod, KeyProtector }"
+        -Desc "STEP 1: QUERY BITLOCKER STATUS`n`nWHEN TO USE THIS:`nUse this to verify if a laptop's hard drive is fully encrypted, or to check which Key Protectors (like TPM or a Numerical Password) are actively securing the drive.`n`nWHAT IT DOES:`nWe are establishing a remote WinRM session to query the target's BitLocker management interface using the 'Get-BitLockerVolume' cmdlet. This retrieves the encryption status, protection state, and active key protectors for all mounted volumes.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open an elevated Command Prompt and type 'manage-bde -status', or navigate to 'Control Panel > System and Security > BitLocker Drive Encryption'." `
+        -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-BitLockerVolume | Select-Object MountPoint, VolumeStatus, ProtectionStatus, EncryptionMethod, KeyProtector }"
 
     $bdeVolumes = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
         Get-BitLockerVolume | Select-Object MountPoint, VolumeStatus, EncryptionMethod, ProtectionStatus,
@@ -90,7 +107,7 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
-                & $AuditHelper -Target $Target -Action "Queried BitLocker Status" -SharedRoot $SharedRoot
+                & $AuditHelper -Target $Target -Action "Queried BitLocker Status (WinRM)" -SharedRoot $SharedRoot
             }
         }
         # ---------------------------
@@ -100,8 +117,49 @@ try {
     }
 
 } catch {
-    Write-Host "`n [UHDC ERROR] Could not retrieve BitLocker status."
-    Write-Host "     $($_.Exception.Message)"
+    # ------------------------------------------------------------------
+    # PSEXEC FALLBACK
+    # ------------------------------------------------------------------
+    Write-Host "  > [i] WinRM Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
+
+    $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
+
+    if (Test-Path $psExecPath) {
+
+        Wait-TrainingStep `
+            -Desc "STEP 1 (FALLBACK): PSEXEC MANAGE-BDE`n`nWHEN TO USE THIS:`nThis triggers automatically if the standard WinRM query is blocked by the target's Windows Firewall.`n`nWHAT IT DOES:`nWe use PsExec to bypass the WinRM block and execute the native 'manage-bde -status' command directly on the target PC. We then stream the text output back to the console.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt on the user's PC and typing 'manage-bde -status'." `
+            -Code "`$output = & `$psExecPath /accepteula \\`$Target -s manage-bde -status"
+
+        # Execute manage-bde and capture output/errors
+        $bdeOutput = & $psExecPath /accepteula \\$Target -s manage-bde -status 2>&1
+
+        Write-Host "`n --- BitLocker Volumes (Fallback) ---"
+
+        $foundData = $false
+        foreach ($line in $bdeOutput) {
+            # Filter out standard PsExec startup noise and manage-bde copyright headers
+            if ($line -match "PsExec v" -or $line -match "Sysinternals" -or $line -match "Copyright" -or $line -match "starting on" -or $line -match "exited with error code" -or $line -match "Configuration Tool version") { continue }
+
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                Write-Host "  $line"
+                $foundData = $true
+            }
+        }
+
+        if (-not $foundData) {
+            Write-Host "  > [!] PsExec fallback failed. Target may be completely locked down."
+        } else {
+            # --- AUDIT LOG INJECTION (Fallback) ---
+            if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
+                $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
+                if (Test-Path $AuditHelper) { 
+                    & $AuditHelper -Target $Target -Action "Queried BitLocker Status (PsExec Fallback)" -SharedRoot $SharedRoot
+                }
+            }
+        }
+    } else {
+        Write-Host "  > [!] ERROR: psexec.exe missing from \Core. Cannot attempt fallback."
+    }
 }
 
 Write-Host "========================================`n"

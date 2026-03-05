@@ -4,6 +4,7 @@
 # quick match, and then falls back to a context-aware scan (based on Office attribute
 # or OU) if necessary. Upon finding the user's active workstation via WMI, it
 # automatically updates the console's target field and the history database.
+# Optimized for PS 5.1 (.NET Ping to prevent DNS resolution crashes).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -16,7 +17,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER ---
+# --- TRAINING MODE HELPER (WPF Safe) ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -26,7 +27,13 @@ function Wait-TrainingStep {
         $SyncHash.StepAck = $false
 
         # Pause the script until the GUI user clicks Execute or Abort
-        while (-not $SyncHash.StepAck) { Start-Sleep -Milliseconds 200 }
+        while (-not $SyncHash.StepAck) { 
+            Start-Sleep -Milliseconds 200 
+            $Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+            if ($Dispatcher) {
+                $Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+            }
+        }
 
         if (-not $SyncHash.StepResult) {
             throw "Execution aborted by user during Training Mode."
@@ -126,7 +133,14 @@ if (Test-Path $HistoryFile) {
             $hPC = $match.Computer
             Write-Host "   Checking last known: $hPC..." -NoNewline
 
-            if (Test-Connection -ComputerName $hPC -Count 1 -Quiet) {
+            # PS 5.1 Fix: Use .NET Ping instead of Test-Connection to prevent DNS resolution crashes
+            $pingSender = New-Object System.Net.NetworkInformation.Ping
+            $isOnline = $false
+            try {
+                if ($pingSender.Send($hPC, 500).Status -eq "Success") { $isOnline = $true }
+            } catch {}
+
+            if ($isOnline) {
                 try {
                     $check = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName $hPC -ErrorAction Stop
                     $rawUser = $check.UserName
@@ -201,7 +215,7 @@ if (-not $foundPC) {
 
     Wait-TrainingStep `
         -Desc "STEP 4: EXECUTE WMI SWEEP`n`nWHAT IT DOES:`nWe iterate through our narrowed list of computers. We send a 500ms ping to see if the PC is turned on. If it is, we use WMI to ask the PC 'Who is logged in right now?'. As soon as we find a match for our target user, we break the loop, update the history database, and send the PC name back to the GUI.`n`nIN-PERSON EQUIVALENT:`nWalking down the row of desks in the Accounting department, wiggling the mouse on every active computer, and reading the lock screen until you find the user you are looking for." `
-        -Code "foreach (`$pc in `$computers) {`n    if (Test-Connection `$pc) {`n        `$compInfo = Get-CimInstance Win32_ComputerSystem -ComputerName `$pc`n        if (`$compInfo.UserName -match `$ResolvedUser) { break }`n    }`n}"
+        -Code "foreach (`$pc in `$computers) {`n    if (`$pingSender.Send(`$pc, 500).Status -eq 'Success') {`n        `$compInfo = Get-CimInstance Win32_ComputerSystem -ComputerName `$pc`n        if (`$compInfo.UserName -match `$ResolvedUser) { break }`n    }`n}"
 
     $pingSender = New-Object System.Net.NetworkInformation.Ping
     $scannedCount = 0
@@ -216,8 +230,7 @@ if (-not $foundPC) {
 
         $isOnline = $false
         try {
-            $reply = $pingSender.Send($pc, 500) # Lowered to 500ms for faster GUI response
-            if ($reply.Status -eq "Success") { $isOnline = $true }
+            if ($pingSender.Send($pc, 500).Status -eq "Success") { $isOnline = $true }
         } catch {}
 
         if ($isOnline) {

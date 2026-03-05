@@ -2,7 +2,7 @@
 # UHDC.ps1 - Unified Help Desk Console (Master Script)
 # Place this script in the ROOT folder (e.g., \\Server\Share\UHDC\)
 # DESCRIPTION: The main GUI and asynchronous runspace engine for the UHDC platform.
-# Features Role-Based Access Control (RBAC) and an Interactive Training Engine.
+# Fully optimized for PowerShell 5.1 compatibility.
 # ==============================================================================================
 
 # ------------------------------------------------------------------
@@ -18,6 +18,8 @@ if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 # ------------------------------------------------------------------
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName Microsoft.VisualBasic
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
 # Determine the application directory regardless of how it was launched
 if ($MyInvocation.MyCommand.Path) {
@@ -93,6 +95,66 @@ if (-not (Test-Path $psExecPath)) {
 }
 
 # ------------------------------------------------------------------
+# THEME ENGINE & USER PREFERENCES (PS 5.1 Optimized)
+# ------------------------------------------------------------------
+$Themes = [ordered]@{
+    "PNW (Default)"      = @{ BG_Main="#1E1E1E"; BG_Sec="#111111"; BG_Con="#0C0C0C"; BG_Btn="#2D2D30"; Acc_Pri="#00A2ED"; Acc_Sec="#00FF00" }
+    "Maritime Retro"     = @{ BG_Main="#0C2340"; BG_Sec="#071526"; BG_Con="#030A13"; BG_Btn="#113159"; Acc_Pri="#FFC425"; Acc_Sec="#00A6CE" }
+    "Midnight Terminal"  = @{ BG_Main="#0D0208"; BG_Sec="#000000"; BG_Con="#050104"; BG_Btn="#1A0510"; Acc_Pri="#00F0FF"; Acc_Sec="#FF003C" }
+    "Deep Amethyst"      = @{ BG_Main="#282A36"; BG_Sec="#1E1F29"; BG_Con="#191A21"; BG_Btn="#44475A"; Acc_Pri="#BD93F9"; Acc_Sec="#50FA7B" }
+    "Mainframe"          = @{ BG_Main="#050F05"; BG_Sec="#020802"; BG_Con="#010401"; BG_Btn="#0A1A0A"; Acc_Pri="#00FF41"; Acc_Sec="#00FF42" }
+    "Solarized Dark"     = @{ BG_Main="#002B36"; BG_Sec="#073642"; BG_Con="#001E26"; BG_Btn="#083642"; Acc_Pri="#268BD2"; Acc_Sec="#2AA198" }
+    "Blood Moon"         = @{ BG_Main="#1A0000"; BG_Sec="#0D0000"; BG_Con="#050000"; BG_Btn="#260000"; Acc_Pri="#FF3333"; Acc_Sec="#FF8800" }
+    "Deep Ocean"         = @{ BG_Main="#0F172A"; BG_Sec="#080C17"; BG_Con="#04060C"; BG_Btn="#1E293B"; Acc_Pri="#38BDF8"; Acc_Sec="#34D399" }
+    "Death Valley"       = @{ BG_Main="#2E251E"; BG_Sec="#1F1813"; BG_Con="#140F0C"; BG_Btn="#3D3228"; Acc_Pri="#D97736"; Acc_Sec="#E8B07D" }
+    "Olympics"           = @{ BG_Main="#1A2421"; BG_Sec="#111816"; BG_Con="#0B100E"; BG_Btn="#23312D"; Acc_Pri="#4A90E2"; Acc_Sec="#10B981" }
+    "Cascades"           = @{ BG_Main="#1E2227"; BG_Sec="#14171A"; BG_Con="#0D0F12"; BG_Btn="#282D33"; Acc_Pri="#00B4D8"; Acc_Sec="#E2E8F0" }
+    "Shenandoah"         = @{ BG_Main="#2A1610"; BG_Sec="#1C0E0A"; BG_Con="#110806"; BG_Btn="#381D15"; Acc_Pri="#F97316"; Acc_Sec="#FBBF24" }
+    "Patagonia"          = @{ BG_Main="#1E1B4B"; BG_Sec="#110F2E"; BG_Con="#0A091A"; BG_Btn="#2D286B"; Acc_Pri="#FB923C"; Acc_Sec="#A78BFA" }
+}
+
+$UsersFile = Join-Path -Path $CoreFolder -ChildPath "users.json"
+$UserPrefs = @{}
+
+# Load existing preferences (PS 5.1 PSCustomObject to Hashtable mapping)
+if (Test-Path $UsersFile) {
+    try {
+        $rawPrefs = Get-Content $UsersFile -Raw | ConvertFrom-Json
+        foreach ($prop in $rawPrefs.psobject.properties) {
+            $UserPrefs[$prop.Name] = $prop.Value
+        }
+    } catch {}
+}
+
+# Determine active colors for current user
+$ActiveThemeName = "PNW (Default)"
+$ActiveColors = $Themes[$ActiveThemeName]
+
+if ($UserPrefs.ContainsKey($env:USERNAME)) {
+    $pref = $UserPrefs[$env:USERNAME]
+    if ($pref.ThemeName -eq "Custom" -and $null -ne $pref.CustomColors) {
+        $ActiveThemeName = "Custom"
+        # Explicitly map to a hashtable to prevent PS 5.1 serialization quirks
+        $ActiveColors = @{
+            BG_Main = $pref.CustomColors.BG_Main
+            BG_Sec  = $pref.CustomColors.BG_Sec
+            BG_Con  = $pref.CustomColors.BG_Con
+            BG_Btn  = $pref.CustomColors.BG_Btn
+            Acc_Pri = $pref.CustomColors.Acc_Pri
+            Acc_Sec = $pref.CustomColors.Acc_Sec
+        }
+    } elseif ($Themes.ContainsKey($pref.ThemeName)) {
+        $ActiveThemeName = $pref.ThemeName
+        $ActiveColors = $Themes[$ActiveThemeName]
+    }
+}
+
+# Encode theme for safe injection to subscripts across runspaces
+$ThemeJson = $ActiveColors | ConvertTo-Json -Compress
+$ThemeBytes = [System.Text.Encoding]::UTF8.GetBytes($ThemeJson)
+$ThemeB64 = [Convert]::ToBase64String($ThemeBytes)
+
+# ------------------------------------------------------------------
 # INITIALIZE ASYNC RUNSPACE POOL
 # ------------------------------------------------------------------
 $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 15)
@@ -105,13 +167,12 @@ $RunspacePool.Open()
 [xml]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Unified Help Desk Console (UHDC)" Height="950" Width="1350" Background="#1E1E1E" WindowStartupLocation="CenterScreen">
+        Title="Unified Help Desk Console (UHDC)" Height="950" Width="1350" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen">
 
     <Window.Resources>
-        <!-- Standard Button Style -->
         <Style x:Key="StdBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -123,17 +184,17 @@ $RunspacePool.Open()
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#00FF00"/>
-                                <Setter Property="Foreground" Value="#00FF00"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="%%ACC_SEC%%"/>
+                                <Setter Property="Foreground" Value="%%ACC_SEC%%"/>
                                 <Setter TargetName="border" Property="Effect">
                                     <Setter.Value>
-                                        <DropShadowEffect Color="#00FF00" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                        <DropShadowEffect Color="%%ACC_SEC%%" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                     </Setter.Value>
                                 </Setter>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#00FF00"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter TargetName="border" Property="Background" Value="%%ACC_SEC%%"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -141,15 +202,13 @@ $RunspacePool.Open()
             </Setter>
         </Style>
 
-        <!-- Action Button Style (Green Text) -->
         <Style x:Key="ActionBtn" TargetType="Button" BasedOn="{StaticResource StdBtn}">
-            <Setter Property="Foreground" Value="#00FF00"/>
+            <Setter Property="Foreground" Value="%%ACC_SEC%%"/>
         </Style>
 
-        <!-- Danger Button Style (Red Hover) -->
         <Style x:Key="DangerBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -172,7 +231,7 @@ $RunspacePool.Open()
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#FF4444"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -180,10 +239,9 @@ $RunspacePool.Open()
             </Setter>
         </Style>
 
-        <!-- Warning Button Style (Yellow Hover) -->
         <Style x:Key="WarningBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -206,7 +264,7 @@ $RunspacePool.Open()
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#FFD700"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -214,10 +272,9 @@ $RunspacePool.Open()
             </Setter>
         </Style>
 
-        <!-- Master Admin Button Style (Purple Hover) -->
         <Style x:Key="MasterBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -240,7 +297,7 @@ $RunspacePool.Open()
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#B366FF"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -257,33 +314,28 @@ $RunspacePool.Open()
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Header -->
-        <TextBlock Grid.Row="0" Text="$OrgName IT Dashboard" FontSize="26" Foreground="#00A2ED" FontWeight="Bold" Margin="5,0,0,5"/>
+        <TextBlock Grid.Row="0" Text="$OrgName IT Dashboard" FontSize="26" Foreground="%%ACC_PRI%%" FontWeight="Bold" Margin="5,0,0,5"/>
 
-        <!-- MOTD Ticker -->
-        <Grid Grid.Row="1" Height="30" Background="#111111" Margin="5,0,5,10" >
+        <Grid Grid.Row="1" Height="30" Background="%%BG_SEC%%" Margin="5,0,5,10" >
             <Canvas Name="MotdCanvas" ClipToBounds="True">
-                <TextBlock Name="MotdScrollText" Foreground="#00FF00" FontSize="16" FontFamily="Consolas" FontWeight="Bold" Canvas.Left="1350" Canvas.Top="4" Text="Loading Announcements..."/>
+                <TextBlock Name="MotdScrollText" Foreground="%%ACC_SEC%%" FontSize="16" FontFamily="Consolas" FontWeight="Bold" Canvas.Left="1350" Canvas.Top="4" Text="Loading Announcements..."/>
             </Canvas>
         </Grid>
 
-        <!-- Main Content Area -->
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="1.35*"/>
                 <ColumnDefinition Width="1.45*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- LEFT COLUMN -->
             <Grid Grid.Column="0" Margin="0,0,5,0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Q1: AD User Intelligence -->
                 <GroupBox Grid.Row="0" Header="AD User Intelligence &amp; Actions" Foreground="#AAAAAA" BorderBrush="#333333" Margin="5" Padding="0">
-                    <Border BorderThickness="4,0,0,0" BorderBrush="#00A2ED" Background="#161616" Padding="10">
+                    <Border BorderThickness="4,0,0,0" BorderBrush="%%ACC_PRI%%" Background="%%BG_SEC%%" Padding="10">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -293,7 +345,7 @@ $RunspacePool.Open()
 
                             <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
                                 <TextBlock Text="Username:" Foreground="White" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="14"/>
-                                <TextBox Name="ADInput" Width="180" Height="28" FontSize="14" Background="#111111" Foreground="#00A2ED" BorderBrush="#555555" Padding="2" ToolTip="Enter an Employee ID, Username, or First/Last name."/>
+                                <TextBox Name="ADInput" Width="180" Height="28" FontSize="14" Background="%%BG_MAIN%%" Foreground="%%ACC_PRI%%" BorderBrush="#555555" Padding="2" ToolTip="Enter an Employee ID, Username, or First/Last name."/>
                                 <Button Name="BtnADLookup" Content="Search AD" Width="100" Height="28" Margin="10,0,0,0" Style="{StaticResource StdBtn}" ToolTip="Query Active Directory for this user's details and known PCs."/>
                                 <Button Name="BtnDisabledAD" Content="Disabled Users" Width="120" Height="28" Margin="10,0,0,0" Style="{StaticResource StdBtn}" ToolTip="Generate a full report of all disabled accounts in the domain."/>
                                 <Button Name="BtnGlobalMap" Content="Compile Global Map" Width="150" Height="28" Margin="10,0,0,0" Style="{StaticResource MasterBtn}" ToolTip="Compile a master map of all known active nodes on the network."/>
@@ -311,14 +363,13 @@ $RunspacePool.Open()
                                 <Button Name="BtnRemLoc" Content="- Rem PC" Width="65" Height="30" Margin="2" Style="{StaticResource WarningBtn}" ToolTip="Select and remove an incorrect PC from a User's history."/>
                             </WrapPanel>
 
-                            <TextBox Name="ADOutputConsole" Grid.Row="2" Background="#0C0C0C" Foreground="#00FF00" FontFamily="Consolas" FontSize="16" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
+                            <TextBox Name="ADOutputConsole" Grid.Row="2" Background="%%BG_CON%%" Foreground="%%ACC_SEC%%" FontFamily="Consolas" FontSize="16" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
                         </Grid>
                     </Border>
                 </GroupBox>
 
-                <!-- Q4: Command Center & Presence -->
                 <GroupBox Grid.Row="1" Header="Command Center (Active Techs)" Foreground="#AAAAAA" BorderBrush="#333333" Margin="5" Padding="0">
-                    <Border BorderThickness="4,0,0,0" BorderBrush="#00A2ED" Background="#161616" Padding="10">
+                    <Border BorderThickness="4,0,0,0" BorderBrush="%%ACC_PRI%%" Background="%%BG_SEC%%" Padding="10">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -331,22 +382,20 @@ $RunspacePool.Open()
                                 <Button Name="BtnDelMOTD" Content="- MOTD" Width="70" Height="30" Margin="2" Style="{StaticResource WarningBtn}" ToolTip="Remove an existing pinned Message of the Day."/>
                             </WrapPanel>
 
-                            <TextBox Name="OnlineUsersConsole" Grid.Row="1" Background="#0C0C0C" Foreground="#28A745" FontFamily="Consolas" FontSize="14" IsReadOnly="True" VerticalScrollBarVisibility="Hidden" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
+                            <TextBox Name="OnlineUsersConsole" Grid.Row="1" Background="%%BG_CON%%" Foreground="%%ACC_SEC%%" FontFamily="Consolas" FontSize="14" IsReadOnly="True" VerticalScrollBarVisibility="Hidden" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
                         </Grid>
                     </Border>
                 </GroupBox>
             </Grid>
 
-            <!-- RIGHT COLUMN -->
             <Grid Grid.Column="1" Margin="5,0,0,0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <!-- Q3: Remote Access & Diagnostics -->
                 <GroupBox Grid.Row="0" Header="Remote Access &amp; Diagnostics" Foreground="#AAAAAA" BorderBrush="#333333" Margin="5" Padding="0">
-                    <Border BorderThickness="4,0,0,0" BorderBrush="#00A2ED" Background="#161616" Padding="10">
+                    <Border BorderThickness="4,0,0,0" BorderBrush="%%ACC_PRI%%" Background="%%BG_SEC%%" Padding="10">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -355,7 +404,7 @@ $RunspacePool.Open()
                             </Grid.RowDefinitions>
                             <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
                                 <TextBlock Text="Target PC:" Foreground="White" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBox Name="ComputerInput" Width="160" Height="25" Background="#111111" Foreground="#00A2ED" FontWeight="Bold" BorderBrush="#555555" Padding="2" ToolTip="Enter a specific Target PC Name or IP Address."/>
+                                <TextBox Name="ComputerInput" Width="160" Height="25" Background="%%BG_MAIN%%" Foreground="%%ACC_PRI%%" FontWeight="Bold" BorderBrush="#555555" Padding="2" ToolTip="Enter a specific Target PC Name or IP Address."/>
                             </StackPanel>
                             <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
                                 <Button Name="BtnSCCM" Content="SCCM" Width="60" Height="30" Margin="2" Style="{StaticResource ActionBtn}" ToolTip="Launch SCCM Remote Control Viewer for the target PC."/>
@@ -365,14 +414,13 @@ $RunspacePool.Open()
                                 <Button Name="BtnLAPS" Content="LAPS" Width="55" Height="30" Margin="2" Style="{StaticResource StdBtn}" ToolTip="Retrieve the rotating Local Administrator Password from AD."/>
                                 <Button Name="BtnDeploy" Content="Deploy GUI" Width="90" Height="30" Margin="2" Style="{StaticResource MasterBtn}" ToolTip="Push the compiled UHDC Network Shortcut directly to a coworker's PC."/>
                             </WrapPanel>
-                            <TextBox Name="ComputerOutputConsole" Grid.Row="2" Height="120" Background="#0C0C0C" Foreground="#00FF00" FontFamily="Consolas" FontSize="13" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
+                            <TextBox Name="ComputerOutputConsole" Grid.Row="2" Height="120" Background="%%BG_CON%%" Foreground="%%ACC_SEC%%" FontFamily="Consolas" FontSize="13" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
                         </Grid>
                     </Border>
                 </GroupBox>
 
-                <!-- Q2: Endpoint Remediation & Core Tools -->
                 <GroupBox Grid.Row="1" Header="Endpoint Remediation &amp; Core Tools" Foreground="#AAAAAA" BorderBrush="#333333" Margin="5" Padding="0">
-                    <Border BorderThickness="4,0,0,0" BorderBrush="#00A2ED" Background="#161616" Padding="10">
+                    <Border BorderThickness="4,0,0,0" BorderBrush="%%ACC_PRI%%" Background="%%BG_SEC%%" Padding="10">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -381,7 +429,7 @@ $RunspacePool.Open()
                             </Grid.RowDefinitions>
                             <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
                                 <TextBlock Text="Target PC:" Foreground="White" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBox Name="PluginInput" Width="160" Height="25" Background="#111111" Foreground="#00A2ED" FontWeight="Bold" BorderBrush="#555555" Padding="2" ToolTip="Enter a specific Target PC Name or IP Address."/>
+                                <TextBox Name="PluginInput" Width="160" Height="25" Background="%%BG_MAIN%%" Foreground="%%ACC_PRI%%" FontWeight="Bold" BorderBrush="#555555" Padding="2" ToolTip="Enter a specific Target PC Name or IP Address."/>
                             </StackPanel>
                             <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
                                 <Button Name="BtnNetInfo" Content="Network Info" Width="95" Height="30" Margin="2" Style="{StaticResource StdBtn}" ToolTip="Pull live IP, MAC address, and adapter details from the PC."/>
@@ -401,7 +449,7 @@ $RunspacePool.Open()
                                 <Button Name="BtnRestartSCCM" Content="Restart SCCM" Width="100" Height="30" Margin="2" Style="{StaticResource WarningBtn}" ToolTip="Restart the local SMS Agent Host service to fix SCCM hangs."/>
                                 <Button Name="BtnRestart" Content="Restart Options" Width="110" Height="30" Margin="2" Style="{StaticResource DangerBtn}" ToolTip="Initiate a graceful or forced remote reboot."/>
                             </WrapPanel>
-                            <TextBox Name="PluginOutputConsole" Grid.Row="2" Background="#0C0C0C" Foreground="#00FF00" FontFamily="Consolas" FontSize="13" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
+                            <TextBox Name="PluginOutputConsole" Grid.Row="2" Background="%%BG_CON%%" Foreground="%%ACC_SEC%%" FontFamily="Consolas" FontSize="13" IsReadOnly="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" BorderThickness="1" BorderBrush="#333333"/>
                         </Grid>
                     </Border>
                 </GroupBox>
@@ -409,18 +457,27 @@ $RunspacePool.Open()
             </Grid>
         </Grid>
 
-        <!-- Footer / Status Bar -->
         <Grid Grid.Row="3" Margin="5,10,5,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBlock Name="StatusBar" Grid.Column="0" Text="Ready..." Foreground="#28A745" FontWeight="Bold" VerticalAlignment="Center"/>
-            <CheckBox Name="CbTrainingMode" Grid.Column="1" Content="Training Mode" Foreground="#FFD700" FontWeight="Bold" VerticalAlignment="Center" ToolTip="Enable interactive step-by-step execution." Cursor="Hand"/>
+            <Button Name="BtnTheme" Grid.Column="1" Content="[Theme Settings]" Background="Transparent" Foreground="%%ACC_PRI%%" BorderThickness="0" Cursor="Hand" Margin="0,0,20,0" FontWeight="Bold"/>
+            <CheckBox Name="CbTrainingMode" Grid.Column="2" Content="Training Mode" Foreground="#FFD700" FontWeight="Bold" VerticalAlignment="Center" ToolTip="Enable interactive step-by-step execution." Cursor="Hand"/>
         </Grid>
     </Grid>
 </Window>
 "@
+
+# Inject the active theme colors into the XAML string before loading
+$XAML = $XAML -replace '%%BG_MAIN%%', $ActiveColors.BG_Main
+$XAML = $XAML -replace '%%BG_SEC%%',  $ActiveColors.BG_Sec
+$XAML = $XAML -replace '%%BG_CON%%',  $ActiveColors.BG_Con
+$XAML = $XAML -replace '%%BG_BTN%%',  $ActiveColors.BG_Btn
+$XAML = $XAML -replace '%%ACC_PRI%%', $ActiveColors.Acc_Pri
+$XAML = $XAML -replace '%%ACC_SEC%%', $ActiveColors.Acc_Sec
 
 $XmlReader = New-Object System.Xml.XmlNodeReader $XAML
 $Form = [System.Windows.Markup.XamlReader]::Load($XmlReader)
@@ -434,6 +491,7 @@ $ComputerInput   = $Form.FindName("ComputerInput")
 $UserSelectCombo = $Form.FindName("UserSelectCombo")
 $StatusBar       = $Form.FindName("StatusBar")
 $CbTrainingMode  = $Form.FindName("CbTrainingMode")
+$BtnTheme        = $Form.FindName("BtnTheme")
 
 # Output Consoles
 $ADOutputConsole       = $Form.FindName("ADOutputConsole")
@@ -527,37 +585,253 @@ $global:UHDCSync = [hashtable]::Synchronized(@{
 function Show-StepDialog {
     [xml]$TrainXAML = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Title="UHDC Training Mode - Step Execution" WindowStyle="ToolWindow" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize" SizeToContent="Height" Width="650" Background="#1E1E1E">
+            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+            Title="UHDC Training Mode - Step Execution" WindowStyle="ToolWindow" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize" SizeToContent="Height" Width="750" Background="%%BG_MAIN%%">
+
+        <Window.Resources>
+            <Style x:Key="GlassBtn" TargetType="Button">
+                <Setter Property="Background" Value="%%BG_BTN%%"/>
+                <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="BorderBrush" Value="#444"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="border" Property="BorderBrush" Value="%%ACC_SEC%%"/>
+                                    <Setter Property="Foreground" Value="%%ACC_SEC%%"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </Window.Resources>
+
         <Grid Margin="20">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <TextBlock Text="TRAINING MODE: STEP EXECUTION" Grid.Row="0" Foreground="#FFD700" FontSize="14" FontWeight="Bold" Margin="0,0,0,10"/>
-            <TextBlock Name="StepDesc" Grid.Row="1" Foreground="White" FontSize="16" TextWrapping="Wrap" Margin="0,0,0,20"/>
+                <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/> </Grid.RowDefinitions>
 
-            <TextBlock Text="Underlying PowerShell Command:" Grid.Row="2" Foreground="#00A2ED" FontSize="13" FontWeight="Bold" Margin="0,0,0,5"/>
-            <TextBox Name="StepCode" Grid.Row="3" Background="#0C0C0C" Foreground="#00FF00" FontFamily="Consolas" FontSize="14" IsReadOnly="True" TextWrapping="Wrap" Padding="10" BorderBrush="#444" BorderThickness="1" Margin="0,0,0,20"/>
+            <Grid Grid.Row="0" Margin="0,0,0,15">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="TRAINING MODE: STEP EXECUTION" Foreground="#FFD700" FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/>
+                <Border Grid.Column="1" Background="%%BG_SEC%%" BorderBrush="%%ACC_PRI%%" BorderThickness="1" CornerRadius="12" Padding="10,4">
+                    <TextBlock Name="XpText" Text="LEVEL 1 | 0 XP" Foreground="%%ACC_PRI%%" FontSize="13" FontWeight="Bold"/>
+                </Border>
+            </Grid>
 
-            <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Name="BtnAbort" Content="Abort Tool" Width="100" Height="35" Background="#FF4444" Foreground="White" BorderThickness="0" Margin="0,0,10,0" Cursor="Hand" FontWeight="Bold"/>
-                <Button Name="BtnExecute" Content="Execute Step" Width="130" Height="35" Background="#28A745" Foreground="White" BorderThickness="0" Cursor="Hand" FontWeight="Bold"/>
+            <TextBlock Name="StepDesc" Grid.Row="1" Foreground="White" FontSize="15" TextWrapping="Wrap" Margin="0,0,0,20" LineHeight="22"/>
+
+            <Grid Grid.Row="2" Margin="0,0,0,5">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Underlying PowerShell Logic:" Foreground="%%ACC_PRI%%" FontSize="13" FontWeight="Bold" VerticalAlignment="Bottom"/>
+                <Button Name="BtnCopy" Grid.Column="1" Content="Copy Code" Width="90" Height="24" Style="{StaticResource GlassBtn}" FontSize="11"/>
+            </Grid>
+
+            <Border Grid.Row="3" Background="%%BG_CON%%" BorderBrush="#444" BorderThickness="1" CornerRadius="4" Margin="0,0,0,20">
+                <RichTextBox Name="CodeBox" Background="Transparent" BorderThickness="0" Foreground="White" FontFamily="Consolas" FontSize="14" IsReadOnly="True" Padding="10">
+                    <FlowDocument Name="CodeDoc" PagePadding="0"/>
+                </RichTextBox>
+            </Border>
+
+            <StackPanel Grid.Row="4" Name="ParamPanel" Margin="0,0,0,20" Visibility="Collapsed">
+                <TextBlock Text="Parameter Breakdown:" Foreground="%%ACC_PRI%%" FontSize="13" FontWeight="Bold" Margin="0,0,0,5"/>
+                <ListView Name="ParamList" Background="%%BG_SEC%%" Foreground="White" BorderBrush="#444" FontSize="13">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Parameter" DisplayMemberBinding="{Binding Parameter}" Width="150"/>
+                            <GridViewColumn Header="Passed Value" DisplayMemberBinding="{Binding Value}" Width="200"/>
+                            <GridViewColumn Header="Context" DisplayMemberBinding="{Binding Context}" Width="300"/>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </StackPanel>
+
+            <Border Grid.Row="5" Name="FailureBorder" Background="#2A1111" BorderBrush="#FF4444" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,20" Visibility="Collapsed">
+                <StackPanel>
+                    <TextBlock Text="[!] Common Failure Points:" Foreground="#FF4444" FontSize="13" FontWeight="Bold" Margin="0,0,0,5"/>
+                    <TextBlock Name="FailureText" Foreground="#FF9999" FontSize="13" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Name="BtnAbort" Content="Abort Tool" Width="110" Height="35" Background="#FF4444" Foreground="White" BorderThickness="0" Margin="0,0,10,0" Cursor="Hand" FontWeight="Bold">
+                    <Button.Resources>
+                        <Style TargetType="Border"><Setter Property="CornerRadius" Value="4"/></Style>
+                    </Button.Resources>
+                </Button>
+                <Button Name="BtnExecute" Content="Acknowledge &amp; Execute" Width="180" Height="35" Background="#28A745" Foreground="White" BorderThickness="0" Cursor="Hand" FontWeight="Bold">
+                    <Button.Resources>
+                        <Style TargetType="Border"><Setter Property="CornerRadius" Value="4"/></Style>
+                    </Button.Resources>
+                </Button>
             </StackPanel>
         </Grid>
     </Window>
 "@
+
+    # Inject active colors into the training pop-up
+    $TrainXAML = $TrainXAML -replace '%%BG_MAIN%%', $ActiveColors.BG_Main
+    $TrainXAML = $TrainXAML -replace '%%BG_SEC%%', $ActiveColors.BG_Sec
+    $TrainXAML = $TrainXAML -replace '%%BG_CON%%', $ActiveColors.BG_Con
+    $TrainXAML = $TrainXAML -replace '%%BG_BTN%%', $ActiveColors.BG_Btn
+    $TrainXAML = $TrainXAML -replace '%%ACC_PRI%%', $ActiveColors.Acc_Pri
+    $TrainXAML = $TrainXAML -replace '%%ACC_SEC%%', $ActiveColors.Acc_Sec
+
     $Reader = (New-Object System.Xml.XmlNodeReader $TrainXAML)
     $StepWin = [Windows.Markup.XamlReader]::Load($Reader)
 
-    $StepWin.FindName("StepDesc").Text = $global:UHDCSync.StepDesc
-    $StepWin.FindName("StepCode").Text = $global:UHDCSync.StepCode
+    # Map UI Elements
+    $StepDesc    = $StepWin.FindName("StepDesc")
+    $CodeDoc     = $StepWin.FindName("CodeDoc")
+    $BtnCopy     = $StepWin.FindName("BtnCopy")
+    $ParamPanel  = $StepWin.FindName("ParamPanel")
+    $ParamList   = $StepWin.FindName("ParamList")
+    $FailureBrd  = $StepWin.FindName("FailureBorder")
+    $FailureTxt  = $StepWin.FindName("FailureText")
+    $XpText      = $StepWin.FindName("XpText")
+    $BtnAbort    = $StepWin.FindName("BtnAbort")
+    $BtnExecute  = $StepWin.FindName("BtnExecute")
 
-    $BtnAbort   = $StepWin.FindName("BtnAbort")
-    $BtnExecute = $StepWin.FindName("BtnExecute")
+    $RawCode = $global:UHDCSync.StepCode
+    $StepDesc.Text = $global:UHDCSync.StepDesc
 
+    # ==========================================
+    # 1. GAMIFICATION / XP TRACKING
+    # ==========================================
+    $currentXP = 0
+    if ($UserPrefs.ContainsKey($env:USERNAME) -and $UserPrefs[$env:USERNAME].XP) {
+        $currentXP = [int]$UserPrefs[$env:USERNAME].XP
+    }
+
+    $xpGain = 50
+    $newXP = $currentXP + $xpGain
+    $level = [math]::Floor($newXP / 500) + 1
+    $XpText.Text = "LEVEL $level | $newXP XP (+$xpGain XP)"
+
+    # Save XP back to UserPrefs (PS 5.1 Safe Serialization)
+    if (-not $UserPrefs.ContainsKey($env:USERNAME)) { $UserPrefs[$env:USERNAME] = @{} }
+    $UserPrefs[$env:USERNAME].XP = $newXP
+    try {
+        $exportObj = New-Object PSObject
+        foreach ($key in $UserPrefs.Keys) { 
+            $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $UserPrefs[$key] -Force
+        }
+        $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
+    } catch {}
+
+    # ==========================================
+    # 2. SYNTAX HIGHLIGHTING ENGINE
+    # ==========================================
+    $Paragraph = New-Object System.Windows.Documents.Paragraph
+
+    # Tokenize the code string (Strings, Variables, Parameters, Cmdlets, Others)
+    $Tokens = [regex]::Matches($RawCode, "(`".*?`"|'.*?'|\\\$[a-zA-Z0-9_:]+|-[a-zA-Z0-9_]+|[a-zA-Z]+-[a-zA-Z]+|[^\s]+|\s+)")
+
+    foreach ($Token in $Tokens) {
+        $Run = New-Object System.Windows.Documents.Run($Token.Value)
+
+        if ($Token.Value -match "^`".*`"$|^'.*'$") { 
+            $Run.Foreground = "#E6DB74" # Strings (Yellow)
+        } elseif ($Token.Value -match "^\\\$") { 
+            $Run.Foreground = "#FFB86C" # Variables (Orange)
+        } elseif ($Token.Value -match "^-[a-zA-Z]") { 
+            $Run.Foreground = "#A6E22E" # Parameters (Green)
+        } elseif ($Token.Value -match "^[A-Z][a-z]+-[A-Z][a-z]+") { 
+            $Run.Foreground = "#66D9EF" # Cmdlets (Blue)
+        } elseif ($Token.Value -match "^{|}|\[|\]|\(|\)$") {
+            $Run.Foreground = "#F92672" # Brackets/Braces (Pink)
+        } else { 
+            $Run.Foreground = "#F8F8F2" # Default (White)
+        }
+
+        $Paragraph.Inlines.Add($Run)
+    }
+    $CodeDoc.Blocks.Add($Paragraph)
+
+    # ==========================================
+    # 3. COPY CODE FUNCTIONALITY
+    # ==========================================
+    $BtnCopy.Add_Click({
+        [System.Windows.Clipboard]::SetText($RawCode)
+        $BtnCopy.Content = "Copied!"
+        $BtnCopy.Foreground = "#00FF00"
+
+        # Reset button text after 2 seconds without freezing UI
+        $resetTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $resetTimer.Interval = [TimeSpan]::FromSeconds(2)
+        $resetTimer.Add_Tick({
+            $BtnCopy.Content = "Copy Code"
+            $BtnCopy.Foreground = $ActiveColors.Acc_Pri
+            $resetTimer.Stop()
+        })
+        $resetTimer.Start()
+    })
+
+    # ==========================================
+    # 4. AUTO-GENERATE PARAMETER BREAKDOWN
+    # ==========================================
+    # Regex to find "-Parameter Value" pairs in the code
+    $paramRegex = "(?<param>-[a-zA-Z0-9]+)\s+(?<val>'[^']*'|`"[^`"]*`"|\$?[a-zA-Z0-9_:\\]+)"
+    $paramMatches = [regex]::Matches($RawCode, $paramRegex)
+
+    if ($paramMatches.Count -gt 0) {
+        $ParamPanel.Visibility = "Visible"
+        foreach ($m in $paramMatches) {
+            $pName = $m.Groups['param'].Value
+            $pVal  = $m.Groups['val'].Value
+
+            # Contextual hints based on common parameters
+            $pContext = "Standard argument passed to cmdlet."
+            if ($pName -match "-ComputerName") { $pContext = "Directs the command over the network to the target PC." }
+            if ($pName -match "-Force") { $pContext = "Bypasses standard confirmation prompts/locks." }
+            if ($pName -match "-Recurse") { $pContext = "Applies action to all items inside sub-folders." }
+            if ($pName -match "-ScriptBlock") { $pContext = "The payload of code executed on the remote machine." }
+            if ($pName -match "-Filter") { $pContext = "Narrows down the search results from the API/AD." }
+
+            $ParamList.Items.Add([PSCustomObject]@{
+                Parameter = $pName
+                Value = $pVal
+                Context = $pContext
+            }) | Out-Null
+        }
+    }
+
+    # ==========================================
+    # 5. CONTEXT-AWARE FAILURE POINTS
+    # ==========================================
+    $failMsg = ""
+    if ($RawCode -match "Invoke-Command") {
+        $failMsg = "- WinRM (Port 5985) is blocked by the target's Windows Firewall.`n- The target PC is turned off or off the VPN.`n- Your admin account lacks local admin rights on the target."
+    } elseif ($RawCode -match "psexec") {
+        $failMsg = "- SMB (Port 445) or RPC (Port 135) is blocked by the firewall.`n- The ADMIN$ share is disabled on the target.`n- PsExec.exe is missing from your \Core folder."
+    } elseif ($RawCode -match "Get-CimInstance") {
+        $failMsg = "- The WMI Repository on the target PC is corrupted.`n- WinRM (Port 5985) is blocked."
+    } elseif ($RawCode -match "MgGraph|MgUser|MgDevice") {
+        $failMsg = "- Your Entra ID session expired (Requires re-authentication).`n- You lack the required Intune RBAC roles (Delegated Permissions).`n- The target device is not enrolled in MDM."
+    } elseif ($RawCode -match "Get-ADUser|Get-ADComputer") {
+        $failMsg = "- Cannot reach the Domain Controller (Port 389/636).`n- The ActiveDirectory PowerShell module is not installed locally."
+    }
+
+    if ($failMsg) {
+        $FailureBrd.Visibility = "Visible"
+        $FailureTxt.Text = $failMsg
+    }
+
+    # ==========================================
+    # 6. BUTTON EVENT HANDLERS
+    # ==========================================
     $BtnAbort.Add_Click({
         $global:UHDCSync.StepResult = $false
         $global:UHDCSync.StepAck = $true
@@ -615,21 +889,19 @@ function Invoke-UHDCScriptAsync {
 
     $PS = [powershell]::Create()
     [void]$PS.AddScript({
-        param($Path, $Tgt, $ReqTgt, $Dispatcher, $OutBox, $PC1, $PC2, $SecTgt, $SharedRoot, $SyncHash, $IsTraining)
+        param($Path, $Tgt, $ReqTgt, $Dispatcher, $OutBox, $PC1, $PC2, $SecTgt, $SharedRoot, $SyncHash, $IsTraining, $ThemeB64)
         try {
-            # Only pass the SyncHash to the tool if Training Mode is checked
             $hashToPass = if ($IsTraining) { $SyncHash } else { $null }
 
             if ($ReqTgt -and $SecTgt) {
-                $Result = & $Path $Tgt $SecTgt -SharedRoot $SharedRoot -SyncHash $hashToPass *>&1 | Out-String
+                $Result = & $Path $Tgt $SecTgt -SharedRoot $SharedRoot -SyncHash $hashToPass -ThemeB64 $ThemeB64 *>&1 | Out-String
             } elseif ($ReqTgt) {
-                $Result = & $Path $Tgt -SharedRoot $SharedRoot -SyncHash $hashToPass *>&1 | Out-String
+                $Result = & $Path $Tgt -SharedRoot $SharedRoot -SyncHash $hashToPass -ThemeB64 $ThemeB64 *>&1 | Out-String
             } else {
-                $Result = & $Path -SharedRoot $SharedRoot -SyncHash $hashToPass *>&1 | Out-String
+                $Result = & $Path -SharedRoot $SharedRoot -SyncHash $hashToPass -ThemeB64 $ThemeB64 *>&1 | Out-String
             }
 
             $Dispatcher.Invoke([Action]{
-                # Intercept the GUI Magic Tag to auto-fill the target boxes
                 if ($Result -match '(?m)\[GUI:UPDATE_TARGET:(.+?)\]') {
                     $NewPC = $matches[1].Trim()
                     $PC1.Text = $NewPC
@@ -648,7 +920,7 @@ function Invoke-UHDCScriptAsync {
         }
     })
 
-    # Pass arguments cleanly to the runspace
+    # Pass arguments cleanly to the runspace in the EXACT order of the param() block
     [void]$PS.AddArgument($ScriptPath)
     [void]$PS.AddArgument($Target)
     [void]$PS.AddArgument($RequiresTarget)
@@ -660,13 +932,214 @@ function Invoke-UHDCScriptAsync {
     [void]$PS.AddArgument($SharedRoot)
     [void]$PS.AddArgument($global:UHDCSync)
     [void]$PS.AddArgument([bool]$CbTrainingMode.IsChecked)
+    [void]$PS.AddArgument($ThemeB64) 
 
     $PS.RunspacePool = $RunspacePool
     [void]$PS.BeginInvoke()
 }
 
 # ------------------------------------------------------------------
-# 5. BUTTON LOGIC & EVENT MAPPING
+# 5. THEME PICKER GUI
+# ------------------------------------------------------------------
+function Show-ThemePicker {
+    [xml]$ThemeXAML = @"
+    <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            Title="UHDC Theme Settings" Height="480" Width="450" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen" ResizeMode="NoResize" Topmost="True">
+        <StackPanel Margin="20">
+            <TextBlock Text="UHDC Theme Manager" Foreground="%%ACC_PRI%%" FontSize="22" FontWeight="Bold" Margin="0,0,0,5"/>
+            <TextBlock Text="Select a color profile or define your own." Foreground="#AAAAAA" FontSize="12" Margin="0,0,0,20"/>
+
+            <TextBlock Text="Select Theme Profile:" Foreground="White" FontWeight="Bold" Margin="0,0,0,5"/>
+            <ComboBox Name="ThemeCombo" Height="30" FontSize="14" Margin="0,0,0,20" Background="#333" Foreground="Black"/>
+
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,10,10">
+                    <TextBlock Text="Background Main:" Foreground="#CCC" FontSize="11"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBox Name="TxtBgMain" Grid.Column="0" Height="24" Background="#222" Foreground="White" BorderBrush="#555" VerticalContentAlignment="Center"/>
+                        <Button Name="BtnPickBgMain" Grid.Column="1" Content="..." Width="28" Height="24" Margin="5,0,0,0" Background="#333" BorderBrush="#555" Cursor="Hand" ToolTip="Pick Color"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,10">
+                    <TextBlock Text="Background Secondary:" Foreground="#CCC" FontSize="11"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBox Name="TxtBgSec" Grid.Column="0" Height="24" Background="#222" Foreground="White" BorderBrush="#555" VerticalContentAlignment="Center"/>
+                        <Button Name="BtnPickBgSec" Grid.Column="1" Content="..." Width="28" Height="24" Margin="5,0,0,0" Background="#333" BorderBrush="#555" Cursor="Hand" ToolTip="Pick Color"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,10">
+                    <TextBlock Text="Console Background:" Foreground="#CCC" FontSize="11"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBox Name="TxtBgCon" Grid.Column="0" Height="24" Background="#222" Foreground="White" BorderBrush="#555" VerticalContentAlignment="Center"/>
+                        <Button Name="BtnPickBgCon" Grid.Column="1" Content="..." Width="28" Height="24" Margin="5,0,0,0" Background="#333" BorderBrush="#555" Cursor="Hand" ToolTip="Pick Color"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,10">
+                    <TextBlock Text="Button Background:" Foreground="#CCC" FontSize="11"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBox Name="TxtBgBtn" Grid.Column="0" Height="24" Background="#222" Foreground="White" BorderBrush="#555" VerticalContentAlignment="Center"/>
+                        <Button Name="BtnPickBgBtn" Grid.Column="1" Content="..." Width="28" Height="24" Margin="5,0,0,0" Background="#333" BorderBrush="#555" Cursor="Hand" ToolTip="Pick Color"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,10,0">
+                    <TextBlock Text="Primary Accent:" Foreground="#CCC" FontSize="11"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBox Name="TxtAccPri" Grid.Column="0" Height="24" Background="#222" Foreground="White" BorderBrush="#555" VerticalContentAlignment="Center"/>
+                        <Button Name="BtnPickAccPri" Grid.Column="1" Content="..." Width="28" Height="24" Margin="5,0,0,0" Background="#333" BorderBrush="#555" Cursor="Hand" ToolTip="Pick Color"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,0">
+                    <TextBlock Text="Secondary Accent:" Foreground="#CCC" FontSize="11"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBox Name="TxtAccSec" Grid.Column="0" Height="24" Background="#222" Foreground="White" BorderBrush="#555" VerticalContentAlignment="Center"/>
+                        <Button Name="BtnPickAccSec" Grid.Column="1" Content="..." Width="28" Height="24" Margin="5,0,0,0" Background="#333" BorderBrush="#555" Cursor="Hand" ToolTip="Pick Color"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+
+            <Button Name="BtnSaveTheme" Content="Save &amp; Apply Theme" Height="40" Background="#28A745" Foreground="White" FontWeight="Bold" FontSize="14" Cursor="Hand" BorderThickness="0"/>
+            <TextBlock Name="ThemeStatus" Text="" Foreground="#00FF00" Margin="0,15,0,0" TextAlignment="Center" FontWeight="Bold"/>
+        </StackPanel>
+    </Window>
+"@
+    # Inject current theme colors into the picker window itself
+    $ThemeXAML = $ThemeXAML -replace '%%BG_MAIN%%', $ActiveColors.BG_Main
+    $ThemeXAML = $ThemeXAML -replace '%%ACC_PRI%%', $ActiveColors.Acc_Pri
+
+    $Reader = (New-Object System.Xml.XmlNodeReader $ThemeXAML)
+    $ThemeWin = [Windows.Markup.XamlReader]::Load($Reader)
+
+    $ThemeCombo = $ThemeWin.FindName("ThemeCombo")
+    $TxtBgMain  = $ThemeWin.FindName("TxtBgMain"); $BtnPickBgMain = $ThemeWin.FindName("BtnPickBgMain")
+    $TxtBgSec   = $ThemeWin.FindName("TxtBgSec");  $BtnPickBgSec  = $ThemeWin.FindName("BtnPickBgSec")
+    $TxtBgCon   = $ThemeWin.FindName("TxtBgCon");  $BtnPickBgCon  = $ThemeWin.FindName("BtnPickBgCon")
+    $TxtBgBtn   = $ThemeWin.FindName("TxtBgBtn");  $BtnPickBgBtn  = $ThemeWin.FindName("BtnPickBgBtn")
+    $TxtAccPri  = $ThemeWin.FindName("TxtAccPri"); $BtnPickAccPri = $ThemeWin.FindName("BtnPickAccPri")
+    $TxtAccSec  = $ThemeWin.FindName("TxtAccSec"); $BtnPickAccSec = $ThemeWin.FindName("BtnPickAccSec")
+
+    $BtnSave    = $ThemeWin.FindName("BtnSaveTheme")
+    $ThemeStatus= $ThemeWin.FindName("ThemeStatus")
+
+    foreach ($key in $Themes.Keys) { $ThemeCombo.Items.Add($key) | Out-Null }
+    $ThemeCombo.Items.Add("Custom") | Out-Null
+
+    # Fallback if the user's saved theme name was renamed/deleted
+    if ($ThemeCombo.Items.Contains($ActiveThemeName)) {
+        $ThemeCombo.SelectedItem = $ActiveThemeName
+    } else {
+        $ThemeCombo.SelectedItem = "PNW (Default)"
+    }
+
+    # Enable/Disable inputs based on selection
+    $ThemeCombo.Add_SelectionChanged({
+        $sel = $ThemeCombo.SelectedItem
+        $isCustom = ($sel -eq "Custom")
+
+        $TxtBgMain.IsReadOnly = -not $isCustom; $BtnPickBgMain.IsEnabled = $isCustom
+        $TxtBgSec.IsReadOnly  = -not $isCustom; $BtnPickBgSec.IsEnabled  = $isCustom
+        $TxtBgCon.IsReadOnly  = -not $isCustom; $BtnPickBgCon.IsEnabled  = $isCustom
+        $TxtBgBtn.IsReadOnly  = -not $isCustom; $BtnPickBgBtn.IsEnabled  = $isCustom
+        $TxtAccPri.IsReadOnly = -not $isCustom; $BtnPickAccPri.IsEnabled = $isCustom
+        $TxtAccSec.IsReadOnly = -not $isCustom; $BtnPickAccSec.IsEnabled = $isCustom
+
+        if (-not $isCustom) {
+            $c = $Themes[$sel]
+            $TxtBgMain.Text = $c.BG_Main; $TxtBgSec.Text = $c.BG_Sec; $TxtBgCon.Text = $c.BG_Con
+            $TxtBgBtn.Text = $c.BG_Btn;   $TxtAccPri.Text = $c.Acc_Pri; $TxtAccSec.Text = $c.Acc_Sec
+        }
+    })
+
+    # Trigger the selection change manually to populate the boxes on load
+    $ThemeCombo.RaiseEvent((New-Object System.Windows.Controls.SelectionChangedEventArgs([System.Windows.Controls.Primitives.Selector]::SelectionChangedEvent, @(), @($ThemeCombo.SelectedItem))))
+
+    # --- COLOR PICKER HELPER FUNCTION ---
+    function Get-ColorFromGrid ($InitialHex) {
+        $colorDialog = New-Object System.Windows.Forms.ColorDialog
+        $colorDialog.FullOpen = $true # Opens the advanced grid automatically
+
+        try {
+            if ($InitialHex -match "^#[0-9A-Fa-f]{6}$") {
+                $colorDialog.Color = [System.Drawing.ColorTranslator]::FromHtml($InitialHex)
+            }
+        } catch {}
+
+        if ($colorDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            # Convert the selected color back to a HEX string
+            return "#{0:X2}{1:X2}{2:X2}" -f $colorDialog.Color.R, $colorDialog.Color.G, $colorDialog.Color.B
+        }
+        return $null
+    }
+
+    # --- WIRE UP THE PICKER BUTTONS ---
+    $BtnPickBgMain.Add_Click({ $new = Get-ColorFromGrid $TxtBgMain.Text; if ($new) { $TxtBgMain.Text = $new } })
+    $BtnPickBgSec.Add_Click({  $new = Get-ColorFromGrid $TxtBgSec.Text;  if ($new) { $TxtBgSec.Text = $new } })
+    $BtnPickBgCon.Add_Click({  $new = Get-ColorFromGrid $TxtBgCon.Text;  if ($new) { $TxtBgCon.Text = $new } })
+    $BtnPickBgBtn.Add_Click({  $new = Get-ColorFromGrid $TxtBgBtn.Text;  if ($new) { $TxtBgBtn.Text = $new } })
+    $BtnPickAccPri.Add_Click({ $new = Get-ColorFromGrid $TxtAccPri.Text; if ($new) { $TxtAccPri.Text = $new } })
+    $BtnPickAccSec.Add_Click({ $new = Get-ColorFromGrid $TxtAccSec.Text; if ($new) { $TxtAccSec.Text = $new } })
+
+    # --- SAVE LOGIC ---
+    $BtnSave.Add_Click({
+        $sel = $ThemeCombo.SelectedItem
+        $newPrefs = @{ ThemeName = $sel; CustomColors = $null }
+
+        if ($sel -eq "Custom") {
+            # Basic Hex Validation
+            $hexRegex = "^#[0-9A-Fa-f]{6}$"
+            if ($TxtBgMain.Text -notmatch $hexRegex -or $TxtAccPri.Text -notmatch $hexRegex) {
+                $ThemeStatus.Text = "Error: Invalid Hex Code format (e.g. #1E1E1E)"
+                $ThemeStatus.Foreground = "Red"
+                return
+            }
+            $newPrefs.CustomColors = @{
+                BG_Main = $TxtBgMain.Text; BG_Sec = $TxtBgSec.Text; BG_Con = $TxtBgCon.Text
+                BG_Btn = $TxtBgBtn.Text; Acc_Pri = $TxtAccPri.Text; Acc_Sec = $TxtAccSec.Text
+            }
+        }
+
+        $UserPrefs[$env:USERNAME] = $newPrefs
+
+        # Save to JSON (PS 5.1 Safe Serialization)
+        try {
+            $exportObj = New-Object PSObject
+            foreach ($key in $UserPrefs.Keys) {
+                $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $UserPrefs[$key] -Force
+            }
+            $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
+
+            $ThemeStatus.Text = "Saved! Please restart UHDC to apply changes."
+            $ThemeStatus.Foreground = "#00FF00"
+        } catch {
+            $ThemeStatus.Text = "Error saving to users.json"
+            $ThemeStatus.Foreground = "Red"
+        }
+    })
+
+    $ThemeWin.ShowDialog() | Out-Null
+}
+
+$BtnTheme.Add_Click({
+    Show-ThemePicker
+})
+
+# ------------------------------------------------------------------
+# 6. BUTTON LOGIC & EVENT MAPPING
 # ------------------------------------------------------------------
 
 # ==========================================
@@ -804,7 +1277,8 @@ $BtnIntune.Add_Click({
     }
 
     $IntuneScript = Join-Path -Path $CoreFolder -ChildPath "IntuneMenu.ps1"
-    Start-Process PowerShell -ArgumentList "-File `"$IntuneScript`" -TargetComputer `"$ComputerQuery`" -TargetUser `"$EmailToPass`" -SharedRoot `"$SharedRoot`""
+
+    Start-Process PowerShell -ArgumentList "-WindowStyle Hidden -File `"$IntuneScript`" -TargetComputer `"$ComputerQuery`" -TargetUser `"$EmailToPass`" -SharedRoot `"$SharedRoot`" -ThemeB64 `"$ThemeB64`""
 })
 
 $BtnBookmarkBackup.Add_Click({
@@ -1220,7 +1694,7 @@ $BtnDelMOTD.Add_Click({
 })
 
 # ------------------------------------------------------------------
-# 6. AUTOMATED LIVE ENGINES (Presence & Ticker)
+# 7. AUTOMATED LIVE ENGINES (Presence & Ticker)
 # ------------------------------------------------------------------
 
 # Smooth Scrolling Ticker Timer
@@ -1268,7 +1742,7 @@ $PresencePS = [powershell]::Create()
                     $online += $techName
                 }
             }
-            $display = if ($online.Count -gt 0) { ($online | Sort-Object) -join "  •  " } else { "No active technicians." }
+            $display = if ($online.Count -gt 0) { ($online | Sort-Object) -join "  -  " } else { "No active technicians." }
         } catch {}
 
         # 3. Read MOTD

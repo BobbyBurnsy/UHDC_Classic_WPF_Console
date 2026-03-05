@@ -3,6 +3,7 @@
 # It takes the target user's email address or the computer's hostname and
 # constructs the direct URL to open the Microsoft Endpoint Manager portal.
 # Features strict Cross-Agency Domain Filtering to prevent unauthorized access.
+# Optimized for PowerShell 5.1 (TLS 1.2 Enforcement & Base64 Theme Decoding).
 
 param(
     [Parameter(Mandatory=$false)]
@@ -15,7 +16,10 @@ param(
     [string]$SharedRoot,
 
     [Parameter(Mandatory=$false)]
-    [hashtable]$SyncHash
+    [hashtable]$SyncHash,
+
+    [Parameter(Mandatory=$false)]
+    [string]$ThemeB64
 )
 
 # --- TRAINING MODE HELPER (WPF Safe) ---
@@ -69,8 +73,39 @@ if (-not $TechUPN) {
 $TechDomain = if ($TechUPN -match "@(.*)$") { $matches[1] } else { "" }
 
 # ------------------------------------------------------------------
-# GRAPH API AUTHENTICATION
+# THEME ENGINE INTEGRATION (Base64 Decoding for PS 5.1 Safety)
 # ------------------------------------------------------------------
+# Default fallback colors
+$ActiveColors = @{
+    BG_Main = "#1E1E1E"
+    BG_Sec  = "#111111"
+    BG_Con  = "#0C0C0C"
+    BG_Btn  = "#2D2D30"
+    Acc_Pri = "#00A2ED"
+    Acc_Sec = "#00FF00"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
+    try {
+        $ThemeBytes = [Convert]::FromBase64String($ThemeB64)
+        $ThemeJson = [System.Text.Encoding]::UTF8.GetString($ThemeBytes)
+        $parsed = $ThemeJson | ConvertFrom-Json
+
+        $ActiveColors.BG_Main = $parsed.BG_Main
+        $ActiveColors.BG_Sec  = $parsed.BG_Sec
+        $ActiveColors.BG_Con  = $parsed.BG_Con
+        $ActiveColors.BG_Btn  = $parsed.BG_Btn
+        $ActiveColors.Acc_Pri = $parsed.Acc_Pri
+        $ActiveColors.Acc_Sec = $parsed.Acc_Sec
+    } catch {}
+}
+
+# ------------------------------------------------------------------
+# GRAPH API AUTHENTICATION (PS 5.1 TLS 1.2 ENFORCEMENT)
+# ------------------------------------------------------------------
+# CRITICAL: PS 5.1 defaults to TLS 1.0. Microsoft Graph requires TLS 1.2.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $scopes = @(
     "User.Read.All",
     "DeviceManagementManagedDevices.ReadWrite.All",
@@ -84,7 +119,7 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
     Disconnect-MgGraph -ErrorAction SilentlyContinue
     try { Connect-MgGraph -Scopes $scopes -ErrorAction Stop }
     catch {
-        [System.Windows.MessageBox]::Show("Failed to authenticate to Microsoft Graph API.", "UHDC Error", "OK", "Error")
+        [System.Windows.MessageBox]::Show("Failed to authenticate to Microsoft Graph API. Ensure the Microsoft.Graph module is installed and you have internet access.", "UHDC Error", "OK", "Error")
         return
     }
 }
@@ -92,18 +127,18 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
 Add-Type -AssemblyName PresentationFramework
 
 # ------------------------------------------------------------------
-# UI DEFINITION (XAML - DARK THEME MATCHING UHDC)
+# UI DEFINITION (DYNAMIC XAML)
 # ------------------------------------------------------------------
 [xml]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="UHDC: $OrgName Device Manager" Height="580" Width="720" Background="#1E1E1E" WindowStartupLocation="CenterScreen">
+        Title="UHDC: $OrgName Device Manager" Height="580" Width="720" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen">
 
     <Window.Resources>
         <!-- Standard Button Style -->
         <Style x:Key="StdBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -115,17 +150,17 @@ Add-Type -AssemblyName PresentationFramework
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#00FF00"/>
-                                <Setter Property="Foreground" Value="#00FF00"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="%%ACC_SEC%%"/>
+                                <Setter Property="Foreground" Value="%%ACC_SEC%%"/>
                                 <Setter TargetName="border" Property="Effect">
                                     <Setter.Value>
-                                        <DropShadowEffect Color="#00FF00" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                        <DropShadowEffect Color="%%ACC_SEC%%" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                     </Setter.Value>
                                 </Setter>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#00FF00"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter TargetName="border" Property="Background" Value="%%ACC_SEC%%"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -133,15 +168,15 @@ Add-Type -AssemblyName PresentationFramework
             </Setter>
         </Style>
 
-        <!-- Action Button Style (Green Text) -->
+        <!-- Action Button Style (Secondary Accent Text) -->
         <Style x:Key="ActionBtn" TargetType="Button" BasedOn="{StaticResource StdBtn}">
-            <Setter Property="Foreground" Value="#00FF00"/>
+            <Setter Property="Foreground" Value="%%ACC_SEC%%"/>
         </Style>
 
         <!-- Danger Button Style (Red Hover) -->
         <Style x:Key="DangerBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -164,7 +199,7 @@ Add-Type -AssemblyName PresentationFramework
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#FF4444"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -174,8 +209,8 @@ Add-Type -AssemblyName PresentationFramework
 
         <!-- Warning Button Style (Yellow Hover) -->
         <Style x:Key="WarningBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -198,7 +233,7 @@ Add-Type -AssemblyName PresentationFramework
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#FFD700"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -208,8 +243,8 @@ Add-Type -AssemblyName PresentationFramework
 
         <!-- Master Admin Button Style (Purple Hover) -->
         <Style x:Key="MasterBtn" TargetType="Button">
-            <Setter Property="Background" Value="#2D2D30"/>
-            <Setter Property="Foreground" Value="#00A2ED"/>
+            <Setter Property="Background" Value="%%BG_BTN%%"/>
+            <Setter Property="Foreground" Value="%%ACC_PRI%%"/>
             <Setter Property="BorderBrush" Value="#444444"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -232,7 +267,7 @@ Add-Type -AssemblyName PresentationFramework
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#B366FF"/>
-                                <Setter Property="Foreground" Value="#1E1E1E"/>
+                                <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -250,7 +285,7 @@ Add-Type -AssemblyName PresentationFramework
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Name="HeaderTitle" Text="UHDC Intune: Scanning Azure..." FontSize="18" Foreground="#00A2ED" FontWeight="Bold" Margin="0,0,0,15" TextWrapping="Wrap"/>
+        <TextBlock Grid.Row="0" Name="HeaderTitle" Text="UHDC Intune: Scanning Azure..." FontSize="18" Foreground="%%ACC_PRI%%" FontWeight="Bold" Margin="0,0,0,15" TextWrapping="Wrap"/>
 
         <WrapPanel Grid.Row="1" Name="ActionPanel" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,0,15">
             <Button Name="BtnBitLocker" Content="Get BitLocker Key" Width="130" Height="30" Margin="5" Style="{StaticResource ActionBtn}" Visibility="Collapsed"/>
@@ -261,17 +296,17 @@ Add-Type -AssemblyName PresentationFramework
             <Button Name="BtnReboot" Content="Reboot Device" Width="130" Height="30" Margin="5" Style="{StaticResource DangerBtn}" Visibility="Collapsed"/>
         </WrapPanel>
 
-        <ListBox Grid.Row="2" Name="DeviceList" Background="#111111" Foreground="#00A2ED" FontSize="14" BorderBrush="#555555" BorderThickness="1" Margin="0,0,0,10" SelectionMode="Single"/>
+        <ListBox Grid.Row="2" Name="DeviceList" Background="%%BG_SEC%%" Foreground="%%ACC_PRI%%" FontSize="14" BorderBrush="#555555" BorderThickness="1" Margin="0,0,0,10" SelectionMode="Single"/>
 
-        <TextBlock Grid.Row="3" Name="OutputText" Text="Select a device to see available actions." Foreground="Yellow" TextWrapping="Wrap" Margin="0,10,0,10"/>
+        <TextBlock Grid.Row="3" Name="OutputText" Text="Select a device to see available actions." Foreground="%%ACC_SEC%%" TextWrapping="Wrap" Margin="0,10,0,10"/>
 
         <GroupBox Grid.Row="4" Header="User Authentication Methods (MFA)" Foreground="#AAAAAA" BorderBrush="#333333" Padding="0">
-            <Border BorderThickness="4,0,0,0" BorderBrush="#00A2ED" Background="#161616" Padding="10">
+            <Border BorderThickness="4,0,0,0" BorderBrush="%%ACC_PRI%%" Background="%%BG_SEC%%" Padding="10">
                 <StackPanel Orientation="Horizontal" Margin="5">
                     <Button Name="BtnMFA" Content="View MFA" Width="90" Height="30" Style="{StaticResource MasterBtn}" Margin="0,0,10,0"/>
                     <Button Name="BtnClearMFA" Content="Clear MFA" Width="90" Height="30" Style="{StaticResource DangerBtn}" Margin="0,0,10,0"/>
                     <TextBlock Text="Add Cell (+1 format):" Foreground="White" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                    <TextBox Name="InputPhone" Width="120" Height="25" Background="#111111" Foreground="#00A2ED" BorderBrush="#555555" Padding="2" Margin="0,0,5,0"/>
+                    <TextBox Name="InputPhone" Width="120" Height="25" Background="%%BG_MAIN%%" Foreground="%%ACC_PRI%%" BorderBrush="#555555" Padding="2" Margin="0,0,5,0"/>
                     <Button Name="BtnAddPhone" Content="Add SMS" Width="80" Height="30" Style="{StaticResource ActionBtn}"/>
                 </StackPanel>
             </Border>
@@ -279,6 +314,14 @@ Add-Type -AssemblyName PresentationFramework
     </Grid>
 </Window>
 "@
+
+# Inject the active theme colors into the XAML string before loading
+$XAML = $XAML -replace '%%BG_MAIN%%', $ActiveColors.BG_Main
+$XAML = $XAML -replace '%%BG_SEC%%',  $ActiveColors.BG_Sec
+$XAML = $XAML -replace '%%BG_CON%%',  $ActiveColors.BG_Con
+$XAML = $XAML -replace '%%BG_BTN%%',  $ActiveColors.BG_Btn
+$XAML = $XAML -replace '%%ACC_PRI%%', $ActiveColors.Acc_Pri
+$XAML = $XAML -replace '%%ACC_SEC%%', $ActiveColors.Acc_Sec
 
 $Reader = (New-Object System.Xml.XmlNodeReader $XAML)
 $Form = [Windows.Markup.XamlReader]::Load($Reader)

@@ -2,6 +2,7 @@
 # DESCRIPTION: Forcefully refreshes the target machine's DNS and NetBIOS registration
 # on the domain controller. It executes 'ipconfig /flushdns', 'ipconfig /registerdns',
 # and 'nbtstat -RR' sequentially via PsExec (SYSTEM context).
+# Optimized for PS 5.1 (.NET Ping to prevent DNS resolution crashes & WPF Training Mode Fix).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -14,7 +15,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER ---
+# --- TRAINING MODE HELPER (WPF Safe) ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -24,7 +25,13 @@ function Wait-TrainingStep {
         $SyncHash.StepAck = $false
 
         # Pause the script until the GUI user clicks Execute or Abort
-        while (-not $SyncHash.StepAck) { Start-Sleep -Milliseconds 200 }
+        while (-not $SyncHash.StepAck) { 
+            Start-Sleep -Milliseconds 200 
+            $Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+            if ($Dispatcher) {
+                $Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+            }
+        }
 
         if (-not $SyncHash.StepResult) {
             throw "Execution aborted by user during Training Mode."
@@ -60,8 +67,17 @@ Write-Host "========================================`n"
 
 # We do a quick ping, but we don't stop the script if it fails,
 # because if DNS is broken, the ping will naturally fail!
-if (-not (Test-Connection -ComputerName $Target -Count 1 -Quiet)) {
-    Write-Host " [UHDC] [i] Target didn't answer ping (Likely DNS mismatch). Proceeding anyway..."
+# PS 5.1 Fix: .NET Ping prevents terminating WMI errors if DNS is completely unresolvable.
+$pingSender = New-Object System.Net.NetworkInformation.Ping
+$isOnline = $false
+try {
+    if ($pingSender.Send($Target, 1000).Status -eq "Success") {
+        $isOnline = $true
+    }
+} catch { }
+
+if (-not $isOnline) {
+    Write-Host " [UHDC] [i] Target didn't answer ping (Likely DNS mismatch). Proceeding anyway..." -ForegroundColor Yellow
 } else {
     Write-Host " [UHDC] [i] Target is reachable. Proceeding..."
 }

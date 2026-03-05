@@ -3,14 +3,15 @@
 # inside the central UserHistory.json database. This is triggered by the GUI's 
 # "Add PC" button, allowing techs to instantly update a user's location 
 # without waiting for the Global Network Map to run.
+# Optimized for PS 5.1 (JSON Array Protection).
 
 param(
     [Parameter(Mandatory=$false)]
     [string]$User,
-    
+
     [Parameter(Mandatory=$false)]
     [string]$Computer,
-    
+
     [Parameter(Mandatory=$false)]
     [string]$SharedRoot
 )
@@ -23,7 +24,7 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
         $RootFolder = Split-Path -Path $ScriptDir
         $ConfigFile = Join-Path -Path $RootFolder -ChildPath "config.json"
-        
+
         if (Test-Path $ConfigFile) {
             $Config = Get-Content $ConfigFile -Raw | ConvertFrom-Json
             $SharedRoot = $Config.SharedNetworkRoot
@@ -42,7 +43,7 @@ if ([string]::IsNullOrWhiteSpace($User) -or [string]::IsNullOrWhiteSpace($Comput
     return
 }
 
-# Use Join-Path to guarantee perfect slashes (Updated to target the Core folder)
+# Use Join-Path to guarantee perfect slashes
 $HistoryFile = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json"
 $BackupFile  = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json.bak"
 $TempFile    = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json.tmp"
@@ -57,13 +58,13 @@ if (Test-Path $HistoryFile) {
     if ((Get-Item $HistoryFile).Length -gt 100) {
         Copy-Item -Path $HistoryFile -Destination $BackupFile -Force
     }
-    
+
     try {
         $content = Get-Content $HistoryFile -Raw -ErrorAction Stop
         if (-not [string]::IsNullOrWhiteSpace($content)) {
             $raw = $content | ConvertFrom-Json
             if ($raw -isnot [System.Array]) { $raw = @($raw) }
-            
+
             foreach ($entry in $raw) {
                 if ($entry.User -and $entry.Computer) {
                     $key = "$($entry.User)-$($entry.Computer)"
@@ -99,21 +100,26 @@ if ($db.ContainsKey($scanKey)) {
 if ($db.Count -ge $initialCount -and $db.Count -gt 0) {
     try {
         $finalList = @($db.Values | Sort-Object User)
-        
+
         # STEP A: Convert to JSON *in memory* first. 
         # If this crashes, the file is untouched.
         $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
-        
+
+        # PS 5.1 Single-Item Array Protection
+        if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+            $jsonOutput = "[$jsonOutput]"
+        }
+
         if ([string]::IsNullOrWhiteSpace($jsonOutput)) {
             throw "Generated JSON string was completely empty."
         }
-        
+
         # STEP B: Write to a temporary file.
         Set-Content -Path $TempFile -Value $jsonOutput -Force -ErrorAction Stop
-        
+
         # STEP C: Atomic Swap. Instantly replace the live file.
         Move-Item -Path $TempFile -Destination $HistoryFile -Force -ErrorAction Stop
-        
+
     } catch {
         Write-Host "`n [UHDC] [!] ERROR SAVING: $($_.Exception.Message)" -ForegroundColor Red
         if (Test-Path $TempFile) { Remove-Item $TempFile -Force -ErrorAction SilentlyContinue }

@@ -3,6 +3,7 @@
 # MECM (SCCM) cache using PsExec as SYSTEM. It then uses WinRM to force-empty
 # Windows Temp, all User Temp folders, the Recycle Bin, and finally triggers
 # a background Windows Disk Cleanup (cleanmgr /sagerun:1).
+# Optimized for PS 5.1 (.NET Ping to prevent DNS resolution crashes).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -15,7 +16,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER ---
+# --- TRAINING MODE HELPER (WPF Safe) ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -25,7 +26,13 @@ function Wait-TrainingStep {
         $SyncHash.StepAck = $false
 
         # Pause the script until the GUI user clicks Execute or Abort
-        while (-not $SyncHash.StepAck) { Start-Sleep -Milliseconds 200 }
+        while (-not $SyncHash.StepAck) { 
+            Start-Sleep -Milliseconds 200 
+            $Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
+            if ($Dispatcher) {
+                $Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
+            }
+        }
 
         if (-not $SyncHash.StepResult) {
             throw "Execution aborted by user during Training Mode."
@@ -56,8 +63,15 @@ Write-Host "========================================"
 Write-Host " [UHDC] REMOTE DEEP CLEANUP UTILITY"
 Write-Host "========================================`n"
 
-# 1. Fast Ping Check
-if (-not (Test-Connection -ComputerName $Target -Count 1 -Quiet)) {
+# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+$pingSender = New-Object System.Net.NetworkInformation.Ping
+try {
+    if ($pingSender.Send($Target, 1000).Status -ne "Success") {
+        Write-Host " [UHDC] [!] Offline. $Target is not responding to ping."
+        Write-Host "========================================`n"
+        return
+    }
+} catch {
     Write-Host " [UHDC] [!] Offline. $Target is not responding to ping."
     Write-Host "========================================`n"
     return
