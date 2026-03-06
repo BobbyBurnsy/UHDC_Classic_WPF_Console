@@ -98,11 +98,20 @@ try {
 
         Wait-TrainingStep `
             -Desc "STEP 1: QUERY CRITICAL & ERROR LOGS`n`nWHEN TO USE THIS:`nUse this when a user reports unexpected reboots (BSODs), system hangs, or general instability, but doesn't have a specific error code.`n`nWHAT IT DOES:`nWe are using 'Invoke-Command' to run 'Get-WinEvent' directly on the target's CPU. We filter specifically for Level 1 (Critical) and Level 2 (Error) events, pulling the 50 most recent occurrences, and returning them over the network.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), expand 'Windows Logs', select 'System', click 'Filter Current Log' on the right pane, and check the boxes for 'Critical' and 'Error'." `
-            -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-WinEvent -FilterHashtable @{LogName=@('System','Application'); Level=@(1,2)} -MaxEvents 5 }"
+            -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-WinEvent -FilterHashtable @{LogName='System','Application'; Level=1,2} -MaxEvents 50 }"
 
         Write-Host "  > [1/2] Pulling last 50 Critical/Error logs from System & Application..."
+
         $logs = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
-            Get-WinEvent -FilterHashtable @{LogName=@('System','Application'); Level=@(1,2)} -MaxEvents 50 -ErrorAction SilentlyContinue
+            try {
+                # Primary Method: Fast Hashtable Filter (Removed explicit array casting to prevent "Parameter is incorrect" errors)
+                Get-WinEvent -FilterHashtable @{LogName='System','Application'; Level=1,2} -MaxEvents 50 -ErrorAction Stop
+            } catch {
+                # Fallback Method: If the API rejects the hashtable, pull the raw logs and filter them manually
+                Get-WinEvent -LogName 'System','Application' -MaxEvents 2000 -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.Level -eq 1 -or $_.Level -eq 2 } | 
+                    Select-Object -First 50
+            }
         }
     } else {
 
