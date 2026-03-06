@@ -18,9 +18,13 @@ In no event shall the author or contributors be liable for any direct, indirect,
 ---
 
 ## 📜 License & Attribution
-The WPF version of the Unified Help Desk Console is **100% Freeware**. You are free to deploy, modify, and use this tool within your organization without any cost. 
+This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
 
-**Attribution Requirement:** If you borrow, fork, or adapt any scripts, XAML layouts, or underlying code from this project for your own tools, you **must** provide explicit credit to **Bobby Burns** and a link to **www.github.com/bobbyburnsy** in your documentation and source code.
+Copyright (c) 2026 Bobby Burns
+
+You are free to use, modify, and distribute this software, provided that all derivative works remain open-source under the exact same GPLv3 license. 
+
+**Attribution Requirement:** If you borrow, fork, or adapt any scripts, XAML layouts, or underlying code from this project for your own tools, you **must** provide explicit credit to **Bobby Burns** and a link to **www.github.com/bobbyburnsy** in your documentation and source code. See the `LICENSE` file for full details.
 
 ---
 
@@ -31,16 +35,16 @@ By utilizing PowerShell Runspaces, the UHDC ensures the GUI remains fluid and re
 
 ## ✨ Key Features
 
-*   **PowerShell 5.1 Native:** Fully optimized for the native Windows 10/11 environment. No PowerShell 7 installation required. Uses `.NET Ping` classes to prevent legacy WMI/DNS terminating errors.
-*   **Asynchronous WPF Architecture:** A dynamic 4-quadrant layout. Active Directory intelligence is anchored prominently on the left, while the Command Center and Help Desk Tools are docked on the right.
-*   **Interactive Training Mode:** A gamified, step-by-step execution engine. Junior technicians can see the exact PowerShell code being executed, read plain-English explanations of what the code does, and earn XP for completing tasks.
-*   **Intune & Entra ID Integration:** A dedicated Intune menu powered by the Microsoft Graph API (enforcing TLS 1.2). Manage BitLocker keys, Cloud LAPS, Remote Wipes, and User MFA methods with strict cross-agency domain filtering.
-*   **Smart User Tracking:** Automatically correlates users to their physical PCs using a central `UserHistory.json` database, backed by the `NetworkScan.ps1` intelligence engine.
-*   **Custom Theme Engine:** Personalize your console with built-in themes or create a **Custom** profile (the highest tier of our software license). Features a signature neon glow aesthetic:
-    *   🔵 **Blue/Accent:** Standard actions.
-    *   🔴 **Red:** Destructive/Danger actions (e.g., Remote Wipe, Force Restart).
-    *   🟣 **Purple:** Master Admin tasks (e.g., Global Network Map, Deploy GUI).
-*   **PsExec Fallbacks:** Automated firewall bypasses. If WinRM is blocked, tools automatically fall back to using `psexec.exe` to execute native commands locally on the target.
+* **PowerShell 5.1 Native:** Fully optimized for the native Windows 10/11 environment. No PowerShell 7 installation required. Uses `.NET Ping` classes to prevent legacy WMI/DNS terminating errors.
+* **Asynchronous WPF Architecture:** A dynamic 4-quadrant layout. Active Directory intelligence is anchored prominently on the left, while the Command Center and Help Desk Tools are docked on the right.
+* **Interactive Training Mode:** A gamified, step-by-step execution engine. Junior technicians can see the exact PowerShell code being executed, read plain-English explanations of what the code does, and earn XP for completing tasks.
+* **Intune & Entra ID Integration:** A dedicated Intune menu powered by the Microsoft Graph API (enforcing TLS 1.2). Manage BitLocker keys, Cloud LAPS, Remote Wipes, and User MFA methods with strict cross-agency domain filtering.
+* **Smart User Tracking:** Automatically correlates users to their physical PCs using a central `UserHistory.json` database, backed by the `NetworkScan.ps1` intelligence engine.
+* **Custom Theme Engine:** Personalize your console with built-in themes or create a **Custom** profile (the highest tier of our software license). Features a signature neon glow aesthetic:
+    * 🔵 **Blue/Accent:** Standard actions.
+    * 🔴 **Red:** Destructive/Danger actions (e.g., Remote Wipe, Force Restart).
+    * 🟣 **Purple:** Master Admin tasks (e.g., Global Network Map, Deploy GUI).
+* **PsExec Fallbacks:** Automated firewall bypasses. If WinRM is blocked, tools automatically fall back to using `psexec.exe` to execute native commands locally on the target.
 
 ---
 
