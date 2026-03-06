@@ -142,7 +142,7 @@ if ($UserPrefs.ContainsKey($env:USERNAME)) {
             Acc_Pri = $pref.CustomColors.Acc_Pri
             Acc_Sec = $pref.CustomColors.Acc_Sec
         }
-    } elseif ($Themes.Contains($pref.ThemeName)) { # FIX: PS 5.1 OrderedDictionary uses .Contains()
+    } elseif ($Themes.Contains($pref.ThemeName)) {
         $ActiveThemeName = $pref.ThemeName
         $ActiveColors = $Themes[$ActiveThemeName]
     }
@@ -743,11 +743,16 @@ function Show-StepDialog {
     $StepDesc.Text = $global:UHDCSync.StepDesc
 
     # ==========================================
-    # 1. GAMIFICATION / XP TRACKING
+    # 1. GAMIFICATION / XP TRACKING (PS 5.1 Fix)
     # ==========================================
     $currentXP = 0
-    if ($UserPrefs.ContainsKey($env:USERNAME) -and $UserPrefs[$env:USERNAME].XP) {
-        $currentXP = [int]$UserPrefs[$env:USERNAME].XP
+    if ($UserPrefs.ContainsKey($env:USERNAME)) {
+        $uPref = $UserPrefs[$env:USERNAME]
+        if ($null -ne $uPref.psobject.properties['XP']) {
+            $currentXP = [int]$uPref.XP
+        }
+    } else {
+        $UserPrefs[$env:USERNAME] = [PSCustomObject]@{ ThemeName = "PNW (Default)" }
     }
 
     $xpGain = 50
@@ -755,8 +760,14 @@ function Show-StepDialog {
     $level = [math]::Floor($newXP / 500) + 1
     $XpText.Text = "LEVEL $level | $newXP XP (+$xpGain XP)"
 
-    if (-not $UserPrefs.ContainsKey($env:USERNAME)) { $UserPrefs[$env:USERNAME] = @{} }
-    $UserPrefs[$env:USERNAME].XP = $newXP
+    # Safely inject or update the XP property on the PSCustomObject
+    $uPref = $UserPrefs[$env:USERNAME]
+    if ($null -eq $uPref.psobject.properties['XP']) {
+        $uPref | Add-Member -MemberType NoteProperty -Name 'XP' -Value $newXP
+    } else {
+        $uPref.XP = $newXP
+    }
+
     try {
         $exportObj = New-Object PSObject
         foreach ($key in $UserPrefs.Keys) { 
@@ -813,7 +824,8 @@ function Show-StepDialog {
     # ==========================================
     # 4. AUTO-GENERATE PARAMETER BREAKDOWN
     # ==========================================
-    $paramRegex = "(?<param>-[a-zA-Z0-9]+)\s+(?<val>'[^']*'|`"[^`"]*`"|\$?[a-zA-Z0-9_:\\]+)"
+    # PS 5.1 Fix: Use single quotes to prevent PowerShell from expanding $? into True/False
+    $paramRegex = '(?<param>-[a-zA-Z0-9]+)\s+(?<val>''[^'']*''|"[^"]*"|\$?[a-zA-Z0-9_:\\]+)'
     $paramMatches = [regex]::Matches($RawCode, $paramRegex)
 
     if ($paramMatches.Count -gt 0) {
