@@ -1,21 +1,13 @@
-# ==============================================================================================
 # UHDC.ps1 - Unified Help Desk Console (Master Script)
 # Place this script in the ROOT folder (e.g., \\Server\Share\UHDC\)
-# DESCRIPTION: The main GUI and asynchronous runspace engine for the UHDC platform.
-# Fully optimized for PowerShell 5.1 and ps2exe compilation compatibility.
-# ==============================================================================================
 
-# ------------------------------------------------------------------
-# AUTO-ELEVATE TO ADMINISTRATOR
-# ------------------------------------------------------------------
+# --- Auto-Elevate to Administrator ---
 if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
     Exit
 }
 
-# ------------------------------------------------------------------
-# ENVIRONMENT SETUP & DYNAMIC CONFIGURATION
-# ------------------------------------------------------------------
+# --- Environment Setup & Configuration ---
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName Microsoft.VisualBasic
 Add-Type -AssemblyName System.Windows.Forms
@@ -61,9 +53,7 @@ try {
     Exit
 }
 
-# ------------------------------------------------------------------
-# PREREQUISITE FOLDER & FILE CHECKS
-# ------------------------------------------------------------------
+# --- Prerequisite Folder & File Checks ---
 $RequiredFolders = @(
     (Join-Path $SharedRoot "Logs"),
     (Join-Path $SharedRoot "Logs\Presence"),
@@ -94,9 +84,7 @@ if (-not (Test-Path $psExecPath)) {
     }
 }
 
-# ------------------------------------------------------------------
-# THEME ENGINE & USER PREFERENCES (PS 5.1 Optimized)
-# ------------------------------------------------------------------
+# --- Theme Engine & User Preferences ---
 $Themes = [ordered]@{
     "Solarized Dark"     = @{ BG_Main="#002B36"; BG_Sec="#073642"; BG_Con="#001E26"; BG_Btn="#083642"; Acc_Pri="#268BD2"; Acc_Sec="#2AA198" }
     "PNW (Default)"      = @{ BG_Main="#1E1E1E"; BG_Sec="#111111"; BG_Con="#0C0C0C"; BG_Btn="#2D2D30"; Acc_Pri="#00A2ED"; Acc_Sec="#00FF00" }
@@ -156,16 +144,12 @@ function Update-ThemeB64 {
 }
 Update-ThemeB64
 
-# ------------------------------------------------------------------
-# INITIALIZE ASYNC RUNSPACE POOL
-# ------------------------------------------------------------------
+# --- Initialize Async Runspace Pool ---
 $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 15)
 $RunspacePool.ApartmentState = "STA"
 $RunspacePool.Open()
 
-# ------------------------------------------------------------------
-# 1. DEFINE THE UI (DYNAMIC 4-QUADRANT XAML)
-# ------------------------------------------------------------------
+# --- Define the UI (XAML) ---
 [string]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -501,9 +485,7 @@ $StringReader = New-Object System.IO.StringReader $XAML
 $XmlReader = [System.Xml.XmlReader]::Create($StringReader)
 $Form = [System.Windows.Markup.XamlReader]::Load($XmlReader)
 
-# ------------------------------------------------------------------
-# LIVE THEME UPDATER FUNCTION
-# ------------------------------------------------------------------
+# --- Theme Updater ---
 function Update-AppTheme($Colors) {
     try {
         $Form.Resources["BgMainColor"] = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.BG_Main)
@@ -518,9 +500,7 @@ function Update-AppTheme($Colors) {
     } catch {}
 }
 
-# ------------------------------------------------------------------
-# 2. MAP UI ELEMENTS & RBAC
-# ------------------------------------------------------------------
+# --- Map UI Elements & RBAC ---
 $ADInput         = $Form.FindName("ADInput")
 $PluginInput     = $Form.FindName("PluginInput")
 $ComputerInput   = $Form.FindName("ComputerInput")
@@ -581,7 +561,7 @@ $BtnNetSend = $Form.FindName("BtnNetSend")
 $BtnAddMOTD = $Form.FindName("BtnAddMOTD")
 $BtnDelMOTD = $Form.FindName("BtnDelMOTD")
 
-# --- ROLE-BASED ACCESS CONTROL (RBAC) ---
+# Role-Based Access Control
 if (-not ($MasterAdmins -contains $env:USERNAME)) {
     $BtnGlobalMap.Visibility = "Collapsed"
     $BtnDeploy.Visibility = "Collapsed"
@@ -591,9 +571,7 @@ if ($Trainees -contains $env:USERNAME) {
     $CbTrainingMode.IsChecked = $true
 }
 
-# ------------------------------------------------------------------
-# AUDIT LOGGING FUNCTION
-# ------------------------------------------------------------------
+# --- Audit Logging ---
 function Write-AuditLog {
     param([string]$Action, [string]$Target)
     try {
@@ -607,9 +585,7 @@ function Write-AuditLog {
     } catch { }
 }
 
-# ------------------------------------------------------------------
-# 3. INTERACTIVE TRAINING ENGINE (SYNC HASH)
-# ------------------------------------------------------------------
+# --- Interactive Training Engine ---
 $global:UHDCSync = [hashtable]::Synchronized(@{
     StepReady  = $false
     StepDesc   = ""
@@ -742,9 +718,7 @@ function Show-StepDialog {
     $RawCode = $global:UHDCSync.StepCode
     $StepDesc.Text = $global:UHDCSync.StepDesc
 
-    # ==========================================
-    # 1. GAMIFICATION / XP TRACKING (PS 5.1 Fix)
-    # ==========================================
+    # XP Tracking
     $currentXP = 0
     if ($UserPrefs.ContainsKey($env:USERNAME)) {
         $uPref = $UserPrefs[$env:USERNAME]
@@ -760,7 +734,6 @@ function Show-StepDialog {
     $level = [math]::Floor($newXP / 500) + 1
     $XpText.Text = "LEVEL $level | $newXP XP (+$xpGain XP)"
 
-    # Safely inject or update the XP property on the PSCustomObject
     $uPref = $UserPrefs[$env:USERNAME]
     if ($null -eq $uPref.psobject.properties['XP']) {
         $uPref | Add-Member -MemberType NoteProperty -Name 'XP' -Value $newXP
@@ -776,9 +749,7 @@ function Show-StepDialog {
         $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
     } catch {}
 
-    # ==========================================
-    # 2. SYNTAX HIGHLIGHTING ENGINE
-    # ==========================================
+    # Syntax Highlighting
     $Paragraph = New-Object System.Windows.Documents.Paragraph
     $Tokens = [regex]::Matches($RawCode, "(`".*?`"|'.*?'|\\\$[a-zA-Z0-9_:]+|-[a-zA-Z0-9_]+|[a-zA-Z]+-[a-zA-Z]+|[^\s]+|\s+)")
 
@@ -803,9 +774,7 @@ function Show-StepDialog {
     }
     $CodeDoc.Blocks.Add($Paragraph)
 
-    # ==========================================
-    # 3. COPY CODE FUNCTIONALITY
-    # ==========================================
+    # Copy Code
     $BtnCopy.Add_Click({
         [System.Windows.Clipboard]::SetText($RawCode)
         $BtnCopy.Content = "Copied!"
@@ -821,10 +790,7 @@ function Show-StepDialog {
         $resetTimer.Start()
     })
 
-    # ==========================================
-    # 4. AUTO-GENERATE PARAMETER BREAKDOWN
-    # ==========================================
-    # PS 5.1 Fix: Use single quotes to prevent PowerShell from expanding $? into True/False
+    # Parameter Breakdown
     $paramRegex = '(?<param>-[a-zA-Z0-9]+)\s+(?<val>''[^'']*''|"[^"]*"|\$?[a-zA-Z0-9_:\\]+)'
     $paramMatches = [regex]::Matches($RawCode, $paramRegex)
 
@@ -849,9 +815,7 @@ function Show-StepDialog {
         }
     }
 
-    # ==========================================
-    # 5. CONTEXT-AWARE FAILURE POINTS
-    # ==========================================
+    # Failure Points
     $failMsg = ""
     if ($RawCode -match "Invoke-Command") {
         $failMsg = "- WinRM (Port 5985) is blocked by the target's Windows Firewall.`n- The target PC is turned off or off the VPN.`n- Your admin account lacks local admin rights on the target."
@@ -870,9 +834,7 @@ function Show-StepDialog {
         $FailureTxt.Text = $failMsg
     }
 
-    # ==========================================
-    # 6. BUTTON EVENT HANDLERS
-    # ==========================================
+    # Button Event Handlers
     $BtnAbort.Add_Click({
         $global:UHDCSync.StepResult = $false
         $global:UHDCSync.StepAck = $true
@@ -905,9 +867,7 @@ $TrainingTimer.Add_Tick({
 })
 $TrainingTimer.Start()
 
-# ------------------------------------------------------------------
-# 4. CORE ASYNC ENGINE
-# ------------------------------------------------------------------
+# --- Async Execution Engine ---
 function Invoke-UHDCScriptAsync {
     param(
         [string]$ScriptName,
@@ -988,9 +948,7 @@ function Invoke-UHDCScriptAsync {
     [void]$PS.BeginInvoke()
 }
 
-# ------------------------------------------------------------------
-# 5. THEME PICKER GUI
-# ------------------------------------------------------------------
+# --- Theme Picker GUI ---
 function Show-ThemePicker {
     [string]$ThemeXAML = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -1101,7 +1059,6 @@ function Show-ThemePicker {
         $ThemeCombo.SelectedItem = "Solarized Dark"
     }
 
-    # Helper to update the visual preview boxes
     $UpdatePreviews = {
         try { $PrevBgMain.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString($TxtBgMain.Text) } catch {}
         try { $PrevBgSec.Background  = [System.Windows.Media.BrushConverter]::new().ConvertFromString($TxtBgSec.Text) } catch {}
@@ -1154,7 +1111,6 @@ function Show-ThemePicker {
     $BtnPickAccPri.Add_Click({ $new = Get-ColorFromGrid $TxtAccPri.Text; if ($new) { $TxtAccPri.Text = $new; &$UpdatePreviews } })
     $BtnPickAccSec.Add_Click({ $new = Get-ColorFromGrid $TxtAccSec.Text; if ($new) { $TxtAccSec.Text = $new; &$UpdatePreviews } })
 
-    # --- SAVE LOGIC ---
     $BtnSave.Add_Click({
         $sel = $ThemeCombo.SelectedItem
         $newPrefs = @{ ThemeName = $sel; CustomColors = $null }
@@ -1183,7 +1139,6 @@ function Show-ThemePicker {
             }
             $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
 
-            # LIVE UPDATE: Apply colors instantly to the main window
             Update-AppTheme $colorsToApply
 
             $ThemeStatus.Text = "Saved and Applied!"
@@ -1201,14 +1156,9 @@ $BtnTheme.Add_Click({
     Show-ThemePicker
 })
 
-# ------------------------------------------------------------------
-# 6. BUTTON LOGIC & EVENT MAPPING
-# ------------------------------------------------------------------
+# --- Button Logic & Event Mapping ---
 
-# ==========================================
-# Q1: AD INTELLIGENCE & ACTIONS
-# ==========================================
-
+# Q1: AD Intelligence & Actions
 $ADInput.Add_KeyDown({
     if ($_.Key -eq 'Return') {
         $_.Handled = $true
@@ -1434,10 +1384,7 @@ $BtnGlobalMap.Add_Click({
                            -TargetOutputConsole $ADOutputConsole
 })
 
-# ==========================================
-# Q3: REMOTE ACCESS & DIAGNOSTICS
-# ==========================================
-
+# Q3: Remote Access & Diagnostics
 $BtnSCCM.Add_Click({
     $sccmPath = "C:\Program Files (x86)\Microsoft Endpoint Manager\AdminConsole\bin\i386\CmRcViewer.exe"
 
@@ -1554,10 +1501,7 @@ $BtnDeploy.Add_Click({
     [void]$PS.BeginInvoke()
 })
 
-# ==========================================
-# Q2: ENDPOINT REMEDIATION & CORE TOOLS
-# ==========================================
-
+# Q2: Endpoint Remediation & Core Tools
 $BtnNetInfo.Add_Click({
     Invoke-UHDCScriptAsync -ScriptName "Get-NetworkInfo.ps1" `
                            -RequiresTarget $true `
@@ -1696,10 +1640,7 @@ $BtnRestart.Add_Click({
                            -ScriptDir $ToolsFolder
 })
 
-# ==========================================
-# Q4: COMMAND CENTER & COMMUNICATIONS
-# ==========================================
-
+# Q4: Command Center & Communications
 $BtnNetSend.Add_Click({
     $Target = if ($ComputerInput.Text) { $ComputerInput.Text } else { [Microsoft.VisualBasic.Interaction]::InputBox("Enter the Target PC Name:", "Net Send", "") }
     if ([string]::IsNullOrWhiteSpace($Target)) { return }
@@ -1756,11 +1697,7 @@ $BtnDelMOTD.Add_Click({
     }
 })
 
-# ------------------------------------------------------------------
-# 7. AUTOMATED LIVE ENGINES (Presence & Ticker)
-# ------------------------------------------------------------------
-
-# Smooth Scrolling Ticker Timer
+# --- Background Engines (Presence & Ticker) ---
 $ScrollTimer = New-Object System.Windows.Threading.DispatcherTimer
 $ScrollTimer.Interval = [TimeSpan]::FromMilliseconds(20)
 $ScrollTimer.Add_Tick({
@@ -1778,7 +1715,6 @@ $ScrollTimer.Add_Tick({
 })
 $ScrollTimer.Start()
 
-# Background Runspace for Presence and MOTD Reading
 $PresencePS = [powershell]::Create()
 [void]$PresencePS.AddScript({
     param($PDir, $SRoot, $User, $Dispatcher, $OnlineConsole, $MotdText)
@@ -1787,13 +1723,11 @@ $PresencePS = [powershell]::Create()
     $lastMotd = ""
 
     while ($true) {
-        # 1. Write our own heartbeat
         try {
             $MyFile = Join-Path -Path $PDir -ChildPath "Presence_$($User).txt"
             Set-Content -Path $MyFile -Value (Get-Date).Ticks -Force
         } catch {}
 
-        # 2. Read others' heartbeats
         $display = ""
         try {
             $online = @()
@@ -1808,7 +1742,6 @@ $PresencePS = [powershell]::Create()
             $display = if ($online.Count -gt 0) { ($online | Sort-Object) -join "  -  " } else { "No active technicians." }
         } catch {}
 
-        # 3. Read MOTD
         $motdString = ""
         try {
             $motdFile = Join-Path -Path $SRoot -ChildPath "MOTD.json"
@@ -1821,7 +1754,6 @@ $PresencePS = [powershell]::Create()
             } else { $motdString = "No active network announcements." }
         } catch {}
 
-        # 4. Update UI only if changed
         if ($display -ne $lastDisplay -or $motdString -ne $lastMotd) {
             $lastDisplay = $display
             $lastMotd = $motdString
@@ -1845,12 +1777,9 @@ $PresencePS = [powershell]::Create()
 $PresencePS.RunspacePool = $RunspacePool
 [void]$PresencePS.BeginInvoke()
 
-# ------------------------------------------------------------------
-# LAUNCH APPLICATION
-# ------------------------------------------------------------------
+# --- Launch Application ---
 $Form.ShowDialog() | Out-Null
 
-# Cleanup on Exit
 $ScrollTimer.Stop()
 $TrainingTimer.Stop()
 $RunspacePool.Dispose()
