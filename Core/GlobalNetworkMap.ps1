@@ -1,13 +1,10 @@
-# GlobalNetworkMap.ps1 - Place this script in the \Core folder
-# DESCRIPTION: A powerful background scanner that compiles a master map of
-# User-to-Computer relationships. It scans Active Directory for all enabled
-# Windows 10/11 workstations, pings them to check availability, and queries
-# the currently logged-on user. 
-# Optimized for PS 5.1 (.NET Ping & JSON Array Protection).
+# GlobalNetworkMap.ps1
+# Compiles a master map of User-to-Computer relationships.
+# Scans AD for enabled workstations, pings them, and queries the logged-on user.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
-    [string]$DummyTarget, # Absorbs the empty target box from the GUI button
+    [string]$DummyTarget,
 
     [Parameter(Mandatory=$false)]
     [string]$SharedRoot,
@@ -16,7 +13,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -39,11 +36,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -70,16 +64,14 @@ Write-Host "=========================================`n"
 Write-Host " [UHDC] [!] Scope limited to: Active Windows 10/11 Workstations"
 Write-Host " [UHDC] [!] Mode: Additive (Preserves History)"
 
-# ==============================================================================
-# 1. LOAD EXISTING DATABASE (With Composite Key Fix)
-# ==============================================================================
+# --- 1. Load Existing Database ---
 $masterDB = @{}
 $initialCount = 0
 
 if (Test-Path $HistoryFile) {
     Write-Host "`n [UHDC] [1/3] Loading Database..."
 
-    # CRITICAL FIX: Only backup if the file is healthy (>100 bytes).
+    # Only backup if the file is healthy (>100 bytes).
     if ((Get-Item $HistoryFile).Length -gt 100) {
         Copy-Item -Path $HistoryFile -Destination $BackupFile -Force
     }
@@ -93,7 +85,6 @@ if (Test-Path $HistoryFile) {
         if ($raw -isnot [System.Array]) { $raw = @($raw) }
 
         foreach ($entry in $raw) {
-            # The Key is now "User-Computer" to prevent overwriting PC1 with PC2
             if ($entry.User -and $entry.Computer) {
                 $uniqueKey = "$($entry.User)-$($entry.Computer)"
                 $masterDB[$uniqueKey] = $entry
@@ -107,9 +98,7 @@ if (Test-Path $HistoryFile) {
     }
 }
 
-# ==============================================================================
-# 2. GET COMPUTERS (Universal Workstation Filter)
-# ==============================================================================
+# --- 2. Get Computers ---
 Write-Host "`n [UHDC] [2/3] Fetching Computer List from AD..."
 
 Wait-TrainingStep `
@@ -117,7 +106,6 @@ Wait-TrainingStep `
     -Code "`$filter = `"Enabled -eq 'true' -and (OperatingSystem -like '*Windows 10*' -or OperatingSystem -like '*Windows 11*')`"`n`$computers = Get-ADComputer -Filter `$filter | Select-Object -ExpandProperty Name"
 
 try {
-    # WHITE-LABELED: Targets Win10/Win11 instead of specific Company PC Names
     $filter = "Enabled -eq 'true' -and (OperatingSystem -like '*Windows 10*' -or OperatingSystem -like '*Windows 11*')"
     $computers = Get-ADComputer -Filter $filter -Properties OperatingSystem | Select-Object -ExpandProperty Name
 } catch {
@@ -134,9 +122,7 @@ if ($total -eq 0) {
 Write-Host " [UHDC] [OK] Found $total target workstations."
 Start-Sleep 2
 
-# ==============================================================================
-# 3. SCAN LOOP (PS 5.1 .NET Ping Optimization)
-# ==============================================================================
+# --- 3. Scan Loop ---
 $count = 0
 $newFinds = 0
 $updatedFinds = 0
@@ -151,7 +137,6 @@ foreach ($pc in $computers) {
     $count++
     $percent = "{0:N0}" -f (($count / $total) * 100)
 
-    # Fast Ping Test (.NET class prevents PS 5.1 WMI terminating errors)
     $isOnline = $false
     try {
         if ($pingSender.Send($pc, 500).Status -eq "Success") { $isOnline = $true }
@@ -159,7 +144,6 @@ foreach ($pc in $computers) {
 
     if ($isOnline) {
         try {
-            # Quick WMI Query
             $compInfo = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName $pc -ErrorAction Stop
             $rawUser = $compInfo.UserName
 
@@ -167,16 +151,13 @@ foreach ($pc in $computers) {
                 $cleanUser = ($rawUser -split "\\")[-1].Trim()
                 $timeStamp = (Get-Date).ToString("yyyy-MM-dd HH:mm")
 
-                # Create the Unique Key
                 $scanKey = "$cleanUser-$pc"
 
                 if ($masterDB.ContainsKey($scanKey)) {
-                    # --- UPDATE EXISTING ENTRY ---
                     $masterDB[$scanKey].LastSeen = $timeStamp
                     $updatedFinds++
                 }
                 else {
-                    # --- ADD NEW ENTRY ---
                     $masterDB[$scanKey] = [PSCustomObject]@{
                         User     = $cleanUser
                         Computer = $pc
@@ -191,14 +172,13 @@ foreach ($pc in $computers) {
         } catch {}
     }
 
-    # --- ATOMIC AUTO-SAVE (Every 50 items) ---
+    # Auto-Save (Every 50 items)
     if ($count % 50 -eq 0) {
         if ($masterDB.Count -ge $initialCount -and $masterDB.Count -gt 0) {
             try {
                 $finalList = @($masterDB.Values | Sort-Object User)
                 $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
 
-                # PS 5.1 Single-Item Array Protection
                 if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
                     $jsonOutput = "[$jsonOutput]"
                 }
@@ -212,34 +192,25 @@ foreach ($pc in $computers) {
     }
 }
 
-# ==============================================================================
-# 4. FINAL ATOMIC SAVE
-# ==============================================================================
+# --- 4. Final Save ---
 Write-Host "`n [UHDC] [3/3] Finalizing Database..."
 
 Wait-TrainingStep `
-    -Desc "STEP 4: ATOMIC DATABASE SAVE`n`nWHAT IT DOES:`nWe are converting our updated memory dictionary back into JSON format. To prevent database corruption if the script crashes or the network drops mid-save, we write the data to a '.tmp' file first, and then instantly swap it with the live 'UserHistory.json' file.`n`nIN-PERSON EQUIVALENT:`nSaving your updated Excel tracker as 'Tracker_New.xlsx', deleting the old 'Tracker.xlsx', and renaming the new file to replace it." `
+    -Desc "STEP 4: DATABASE SAVE`n`nWHAT IT DOES:`nWe are converting our updated memory dictionary back into JSON format. To prevent database corruption if the script crashes or the network drops mid-save, we write the data to a '.tmp' file first, and then instantly swap it with the live 'UserHistory.json' file.`n`nIN-PERSON EQUIVALENT:`nSaving your updated Excel tracker as 'Tracker_New.xlsx', deleting the old 'Tracker.xlsx', and renaming the new file to replace it." `
     -Code "Set-Content -Path `$TempFile -Value `$jsonOutput -Force`nMove-Item -Path `$TempFile -Destination `$HistoryFile -Force"
 
-# Final Safety Check: Database should create NEW records, never shrink.
 if ($masterDB.Count -ge $initialCount -and $masterDB.Count -gt 0) {
     try {
         $finalList = @($masterDB.Values | Sort-Object User)
-
-        # 1. Convert to JSON in memory first
         $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
 
-        # PS 5.1 Single-Item Array Protection
         if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
             $jsonOutput = "[$jsonOutput]"
         }
 
         if ([string]::IsNullOrWhiteSpace($jsonOutput)) { throw "Generated JSON string was completely empty." }
 
-        # 2. Write to Temp file
         Set-Content -Path $TempFile -Value $jsonOutput -Force -ErrorAction Stop
-
-        # 3. Swap Temp for Live
         Move-Item -Path $TempFile -Destination $HistoryFile -Force -ErrorAction Stop
 
         Write-Host " [UHDC SUCCESS] Map Complete!"
