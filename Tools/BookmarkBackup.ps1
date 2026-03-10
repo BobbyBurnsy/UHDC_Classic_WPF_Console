@@ -1,8 +1,6 @@
-# BookmarkBackup.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Remotely backs up Google Chrome and Microsoft Edge bookmarks
-# for a specified user via SMB. Saves the files locally to C:\UHDC\Bookmarks
-# and automatically opens File Explorer to the new backup folder.
-# Optimized for PS 5.1 (.NET Ping & WPF Training Mode Fix).
+# BookmarkBackup.ps1
+# Remotely backs up Google Chrome and Microsoft Edge bookmarks for a specified user via SMB.
+# Saves the files locally to C:\UHDC\Bookmarks and opens File Explorer to the new folder.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -18,7 +16,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -41,11 +39,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -59,16 +54,14 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     } catch { }
 }
 
-# ------------------------------------------------------------------
-# 1. VALIDATION & FALLBACKS
-# ------------------------------------------------------------------
+# --- 1. Validation & Fallbacks ---
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================================"
 Write-Host " [UHDC] REMOTE BOOKMARK BACKUP UTILITY"
 Write-Host "========================================================"
 
-# Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# Fast Ping Check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -89,9 +82,7 @@ if ([string]::IsNullOrWhiteSpace($TargetUser)) {
     if ([string]::IsNullOrWhiteSpace($TargetUser)) { return }
 }
 
-# ------------------------------------------------------------------
-# 2. EXECUTE BACKUP
-# ------------------------------------------------------------------
+# --- 2. Execute Backup ---
 $timestamp = (Get-Date).ToString("yyyyMMdd-HHmm")
 $destFolder = "C:\UHDC\Bookmarks\$Target-$TargetUser-$timestamp"
 
@@ -105,7 +96,7 @@ Write-Host " [UHDC] Connecting to hidden administrative share (\\$Target\c$)..."
 
 $found = $false
 
-# --- CHROME BACKUP ---
+# Chrome Backup
 Wait-TrainingStep `
     -Desc "STEP 1: SECURE CHROME BOOKMARKS`n`nWe are accessing the remote computer's hidden C$ administrative share to copy the user's Google Chrome Bookmarks file directly over the network to our local machine.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open File Explorer, type '%LocalAppData%\Google\Chrome\User Data\Default' into the address bar, copy the file named 'Bookmarks', and save it to a flash drive or network share." `
     -Code "Copy-Item '\\$Target\c$\Users\$TargetUser\AppData\Local\Google\Chrome\User Data\Default\Bookmarks' -Destination '$destFolder\Chrome_Bookmarks' -Force"
@@ -118,7 +109,7 @@ if (Test-Path $chromePath) {
     Write-Host " [UHDC] [i] No Chrome bookmarks found for this user."
 }
 
-# --- EDGE BACKUP ---
+# Edge Backup
 Wait-TrainingStep `
     -Desc "STEP 2: SECURE EDGE BOOKMARKS`n`nWe are repeating the process for Microsoft Edge, which stores its user data in a similar Chromium-based directory structure.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would navigate to '%LocalAppData%\Microsoft\Edge\User Data\Default', copy the 'Bookmarks' file, and save it alongside the Chrome backup." `
     -Code "Copy-Item '\\$Target\c$\Users\$TargetUser\AppData\Local\Microsoft\Edge\User Data\Default\Bookmarks' -Destination '$destFolder\Edge_Bookmarks' -Force"
@@ -131,9 +122,7 @@ if (Test-Path $edgePath) {
     Write-Host " [UHDC] [i] No Edge bookmarks found for this user."
 }
 
-# ------------------------------------------------------------------
-# 3. FINISH & OPEN FOLDER
-# ------------------------------------------------------------------
+# --- 3. Finish & Open Folder ---
 if ($found) {
     Write-Host "`n [UHDC SUCCESS] Backup complete! Opening local destination folder..."
 
@@ -141,17 +130,16 @@ if ($found) {
         -Desc "STEP 3: VERIFY BACKUP`n`nWe are launching File Explorer on your local machine and using the '/select' argument to automatically highlight the newly created backup folder.`n`nIN-PERSON EQUIVALENT:`nIf you were at the user's desk, you would open the flash drive or network share to visually confirm the files were successfully copied before proceeding with any destructive actions (like a profile reset or PC swap)." `
         -Code "Start-Process explorer.exe -ArgumentList `"/select,\`"$destFolder\`"`""
 
-    # Uses the /select trick to safely bypass runspace parsing and highlight the new folder!
+    # Open File Explorer and highlight the new folder
     Start-Process explorer.exe -ArgumentList "/select,`"$destFolder`""
 
-    # --- AUDIT LOG INJECTION ---
+    # --- Audit Log ---
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) {
             & $AuditHelper -Target $Target -Action "Backed up Chrome/Edge Bookmarks ($TargetUser)" -SharedRoot $SharedRoot
         }
     }
-    # ---------------------------
 
 } else {
     Write-Host "`n [UHDC] [!] No bookmarks found for user $TargetUser on $Target."
