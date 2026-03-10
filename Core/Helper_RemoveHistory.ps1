@@ -1,9 +1,6 @@
-# Helper_RemoveHistory.ps1 - Place this script in the \Core folder
-# DESCRIPTION: Safely manages the central UserHistory.json database by 
-# finding and deleting a specific User-to-PC mapping. This is used by the 
-# GUI's "Rem PC" button to prune stale or incorrect location data while 
-# leaving the rest of the database intact.
-# Optimized for PS 5.1 (JSON Array Protection).
+# Helper_RemoveHistory.ps1
+# Safely manages the central UserHistory.json database by finding and deleting
+# a specific User-to-PC mapping. Used by the GUI's "Rem PC" button.
 
 param(
     [Parameter(Mandatory=$false)]
@@ -16,9 +13,7 @@ param(
     [string]$SharedRoot
 )
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -38,17 +33,16 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     }
 }
 
-# Use Join-Path to guarantee perfect slashes
 $HistoryFile = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json"
 $BackupFile  = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json.bak"
 $TempFile    = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json.tmp"
 
-# 1. READ EXISTING DATABASE SAFELY
+# --- 1. Read Existing Database ---
 $db = @{}
 $initialCount = 0
 
 if (Test-Path $HistoryFile) {
-    # CRITICAL: Only backup if the file is healthy (>100 bytes).
+    # Only backup if the file is healthy (>100 bytes).
     if ((Get-Item $HistoryFile).Length -gt 100) {
         Copy-Item -Path $HistoryFile -Destination $BackupFile -Force
     }
@@ -73,7 +67,7 @@ if (Test-Path $HistoryFile) {
     }
 }
 
-# 2. REMOVE THE TARGET RECORD
+# --- 2. Remove Target Record ---
 $scanKey = "$User-$Computer"
 
 if ($db.ContainsKey($scanKey)) {
@@ -85,16 +79,16 @@ if ($db.ContainsKey($scanKey)) {
     return
 }
 
-# 3. WRITE BACK TO DISK (STRICT ATOMIC PROTECTION)
-# We strictly enforce that the new DB is exactly 1 record smaller.
+# --- 3. Save Database ---
+# Enforce that the new DB is exactly 1 record smaller.
 if ($db.Count -eq $expectedCount -and $initialCount -gt 0) {
     try {
         $finalList = @($db.Values | Sort-Object User)
 
-        # STEP A: Convert to JSON *in memory* first. 
+        # Convert to JSON in memory first
         $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
 
-        # PS 5.1 Single-Item Array Protection
+        # Single-Item Array Protection
         if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
             $jsonOutput = "[$jsonOutput]"
         }
@@ -103,10 +97,10 @@ if ($db.Count -eq $expectedCount -and $initialCount -gt 0) {
             throw "Generated JSON string was completely empty."
         }
 
-        # STEP B: Write to a temporary file.
+        # Write to a temporary file
         Set-Content -Path $TempFile -Value $jsonOutput -Force -ErrorAction Stop
 
-        # STEP C: Atomic Swap. Instantly replace the live file.
+        # Swap temporary file with live file
         Move-Item -Path $TempFile -Destination $HistoryFile -Force -ErrorAction Stop
 
     } catch {
