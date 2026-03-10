@@ -1,8 +1,7 @@
-# Fix-PrintSpooler.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Remotely stops the Print Spooler service, forcibly deletes any
-# stuck files in the spool\PRINTERS directory, and then restarts the service.
-# Features an automated PsExec fallback if WinRM is blocked by the firewall.
-# Optimized for PS 5.1 (.NET Ping, WPF Training Mode Fix, & PsExec Fallback).
+# Fix-PrintSpooler.ps1
+# Remotely stops the Print Spooler service, deletes stuck files in the 
+# spool\PRINTERS directory, and restarts the service.
+# Includes a PsExec fallback if WinRM is blocked.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -15,7 +14,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -38,11 +37,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -62,7 +58,7 @@ Write-Host "========================================"
 Write-Host " [UHDC] PRINT SPOOLER REMEDIATION"
 Write-Host "========================================"
 
-# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# --- 1. Fast Ping Check ---
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -76,13 +72,11 @@ try {
     return
 }
 
-# 2. Execute Spooler Reset
+# --- 2. Execute Spooler Reset ---
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
-    # ------------------------------------------------------------------
-    # STEP 1: WINRM SPOOLER RESET
-    # ------------------------------------------------------------------
+    # WinRM Spooler Reset
     Wait-TrainingStep `
         -Desc "STEP 1: RESET PRINT SPOOLER (WINRM)`n`nWHEN TO USE THIS:`nUse this when a user complains that a document is 'stuck' in the print queue, preventing all other documents from printing, and right-clicking 'Cancel' does nothing.`n`nWHAT IT DOES:`nWe establish a WinRM session to execute three commands sequentially: 1) Stop the 'Spooler' service to release file locks. 2) Delete all corrupted .SHD and .SPL files inside 'C:\Windows\System32\spool\PRINTERS'. 3) Start the 'Spooler' service back up.`n`nIN-PERSON EQUIVALENT:`nOpen Services (services.msc), stop 'Print Spooler', navigate to the PRINTERS folder in File Explorer, delete all files, and start the service again." `
         -Code "Invoke-Command -ComputerName `$Target -ScriptBlock {`n    Stop-Service -Name Spooler -Force`n    Start-Sleep -Seconds 2`n    Remove-Item -Path 'C:\Windows\System32\spool\PRINTERS\*' -File -Force`n    Start-Service -Name Spooler`n}"
@@ -101,19 +95,16 @@ try {
 
     Write-Host "`n [UHDC SUCCESS] Print Spooler restarted and print queue cleared!"
 
-    # --- AUDIT LOG INJECTION ---
+    # --- Audit Log ---
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) {
             & $AuditHelper -Target $Target -Action "Print Spooler Reset (WinRM)" -SharedRoot $SharedRoot
         }
     }
-    # ---------------------------
 
 } catch {
-    # ------------------------------------------------------------------
-    # PSEXEC FALLBACK
-    # ------------------------------------------------------------------
+    # --- PsExec Fallback ---
     Write-Host "  > [i] WinRM Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
@@ -138,7 +129,7 @@ try {
         if ($success) {
             Write-Host "`n [UHDC SUCCESS] Print Spooler restarted and print queue cleared via PsExec!"
 
-            # --- AUDIT LOG INJECTION (Fallback) ---
+            # --- Audit Log (Fallback) ---
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
                 if (Test-Path $AuditHelper) { 
