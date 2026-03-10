@@ -1,9 +1,8 @@
-# Get-EventLogs.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Remotely queries the System and Application event logs.
+# Get-EventLogs.ps1
+# Remotely queries the System and Application event logs.
 # If no keyword is provided, it pulls the last 50 Critical/Error events.
 # If a keyword is provided, it deep-scans the last 10,000 events for matches.
 # Results are exported to a local CSV in C:\UHDC\Logs and previewed in the console.
-# Optimized for PS 5.1 (WinRM Pipeline Offloading & .NET Ping).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -19,7 +18,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -42,11 +41,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -66,7 +62,7 @@ Write-Host "========================================"
 Write-Host " [UHDC] REMOTE EVENT LOG DIAGNOSTICS"
 Write-Host "========================================"
 
-# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# --- 1. Fast Ping Check ---
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -80,20 +76,17 @@ try {
     return
 }
 
-# Define local export directory (Branded for UHDC)
+# --- 2. Setup Export Directory ---
 $LocalTemp = "C:\UHDC\Logs"
 if (-not (Test-Path $LocalTemp)) {
     New-Item -ItemType Directory -Path $LocalTemp -Force | Out-Null
 }
 
-# Create a unique filename with timestamp
 $Timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
 $ExportPath = "$LocalTemp\EventLogs_$Target_$Timestamp.csv"
 
 try {
-    # ------------------------------------------------------------------
-    # STEP 1: QUERY EVENT LOGS (WinRM Offloaded)
-    # ------------------------------------------------------------------
+    # --- 3. Query Event Logs ---
     if ([string]::IsNullOrWhiteSpace($Keyword)) {
 
         Wait-TrainingStep `
@@ -104,10 +97,8 @@ try {
 
         $logs = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
             try {
-                # Primary Method: Fast Hashtable Filter (Removed explicit array casting to prevent "Parameter is incorrect" errors)
                 Get-WinEvent -FilterHashtable @{LogName='System','Application'; Level=1,2} -MaxEvents 50 -ErrorAction Stop
             } catch {
-                # Fallback Method: If the API rejects the hashtable, pull the raw logs and filter them manually
                 Get-WinEvent -LogName 'System','Application' -MaxEvents 2000 -ErrorAction SilentlyContinue | 
                     Where-Object { $_.Level -eq 1 -or $_.Level -eq 2 } | 
                     Select-Object -First 50
@@ -122,7 +113,6 @@ try {
         Write-Host "  > [1/2] Deep searching last 10,000 events for keyword: '$Keyword'..."
         Write-Host "    (Offloading query to target CPU... Please wait...)"
 
-        # The $using: scope modifier allows us to pass the local $Keyword variable into the remote runspace
         $logs = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
             Get-WinEvent -LogName 'System','Application' -MaxEvents 10000 -ErrorAction SilentlyContinue |
             Where-Object { $_.Message -match $using:Keyword -or $_.ProviderName -match $using:Keyword }
@@ -132,30 +122,23 @@ try {
     if ($null -ne $logs -and $logs.Count -gt 0) {
         Write-Host "  [UHDC SUCCESS] Found $($logs.Count) matching logs."
 
-        # ------------------------------------------------------------------
-        # STEP 2: EXPORT AND DISPLAY
-        # ------------------------------------------------------------------
+        # --- 4. Export and Display ---
         Wait-TrainingStep `
             -Desc "STEP 2: EXPORT AND ANALYZE`n`nWHEN TO USE THIS:`nEvent logs contain massive blocks of text that are difficult to read in a standard console window. Exporting them to a spreadsheet allows for easy sorting, filtering, and sharing with higher-tier support teams.`n`nWHAT IT DOES:`nWe are selecting the most relevant properties (Time, ID, Level, Provider, and Message) and exporting them to a local CSV file. We then automatically open File Explorer to highlight the new file for immediate review.`n`nIN-PERSON EQUIVALENT:`nIn Event Viewer, right-click the filtered log view and select 'Save Filtered Log File As...', save it as a CSV to the Desktop, and open it in Excel." `
             -Code "`$logs | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, LogName, Message | Export-Csv -Path '$ExportPath' -NoTypeInformation`nStart-Process explorer.exe -ArgumentList `"/select,\`"$ExportPath\`"`""
 
-        # --- EXPORT ENGINE ---
         Write-Host "  > [2/2] Exporting results to CSV..."
         $logs | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, LogName, Message |
                 Export-Csv -Path $ExportPath -NoTypeInformation -Force
 
         Write-Host "  [i] Full results exported to: $ExportPath`n"
 
-        # Automatically open File Explorer and instantly highlight the new file!
         Start-Process explorer.exe -ArgumentList "/select,`"$ExportPath`""
-        # -------------------------
 
-        # Console HUD Output: Limit to 15 so we don't flood the GUI
         $consoleLogs = $logs | Select-Object -First 15
         foreach ($log in $consoleLogs) {
             Write-Host "  [$($log.TimeCreated)] [$($log.LevelDisplayName)] $($log.ProviderName)"
 
-            # Safely handle empty messages
             $msg = if ($log.Message) { $log.Message.Replace("`r`n", " ").Replace("`n", " ") } else { "No message data." }
             if ($msg.Length -gt 150) { $msg = $msg.Substring(0, 147) + "..." }
             Write-Host "  > $msg`n"
@@ -165,7 +148,7 @@ try {
             Write-Host "  [+] ... plus $($logs.Count - 15) more hidden from console. Open the CSV to view them all!" -ForegroundColor Yellow
         }
 
-        # --- AUDIT LOG INJECTION ---
+        # --- Audit Log ---
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
@@ -173,7 +156,6 @@ try {
                 & $AuditHelper -Target $Target -Action $actionStr -SharedRoot $SharedRoot
             }
         }
-        # ---------------------------
 
     } else {
         Write-Host "  [UHDC] [i] No matching event logs found."
