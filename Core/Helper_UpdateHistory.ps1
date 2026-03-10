@@ -1,9 +1,6 @@
-# Helper_UpdateHistory.ps1 - Place this script in the \Core folder
-# DESCRIPTION: Manually injects or updates a specific User-to-PC mapping 
-# inside the central UserHistory.json database. This is triggered by the GUI's 
-# "Add PC" button, allowing techs to instantly update a user's location 
-# without waiting for the Global Network Map to run.
-# Optimized for PS 5.1 (JSON Array Protection).
+# Helper_UpdateHistory.ps1
+# Manually adds or updates a specific User-to-PC mapping in the central
+# UserHistory.json database. Triggered by the GUI's "Add PC" button.
 
 param(
     [Parameter(Mandatory=$false)]
@@ -16,9 +13,7 @@ param(
     [string]$SharedRoot
 )
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -43,18 +38,16 @@ if ([string]::IsNullOrWhiteSpace($User) -or [string]::IsNullOrWhiteSpace($Comput
     return
 }
 
-# Use Join-Path to guarantee perfect slashes
 $HistoryFile = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json"
 $BackupFile  = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json.bak"
 $TempFile    = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json.tmp"
 
-# 1. READ EXISTING DATABASE SAFELY
+# --- 1. Read Existing Database ---
 $db = @{}
 $initialCount = 0
 
 if (Test-Path $HistoryFile) {
-    # CRITICAL: Only backup if the file is healthy (>100 bytes).
-    # This stops a corrupted 0-byte file from overwriting a good backup.
+    # Only backup if the file is healthy (>100 bytes).
     if ((Get-Item $HistoryFile).Length -gt 100) {
         Copy-Item -Path $HistoryFile -Destination $BackupFile -Force
     }
@@ -79,7 +72,7 @@ if (Test-Path $HistoryFile) {
     }
 }
 
-# 2. ADD OR UPDATE THE RECORD
+# --- 2. Add or Update Record ---
 $scanKey = "$User-$Computer"
 $timeStamp = (Get-Date).ToString("yyyy-MM-dd HH:mm")
 
@@ -87,7 +80,6 @@ if ($db.ContainsKey($scanKey)) {
     $db[$scanKey].LastSeen = $timeStamp
     $db[$scanKey].Source   = "UHDC-Update"
 } else {
-    # Cast as PSCustomObject so it perfectly matches the parsed JSON format
     $db[$scanKey] = [PSCustomObject]@{
         User     = $User
         Computer = $Computer
@@ -96,16 +88,15 @@ if ($db.ContainsKey($scanKey)) {
     }
 }
 
-# 3. WRITE BACK TO DISK (ATOMIC & PROTECTED)
+# --- 3. Save Database ---
 if ($db.Count -ge $initialCount -and $db.Count -gt 0) {
     try {
         $finalList = @($db.Values | Sort-Object User)
 
-        # STEP A: Convert to JSON *in memory* first. 
-        # If this crashes, the file is untouched.
+        # Convert to JSON in memory first
         $jsonOutput = ConvertTo-Json -InputObject $finalList -Depth 3 -ErrorAction Stop
 
-        # PS 5.1 Single-Item Array Protection
+        # Single-Item Array Protection
         if ($finalList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
             $jsonOutput = "[$jsonOutput]"
         }
@@ -114,10 +105,10 @@ if ($db.Count -ge $initialCount -and $db.Count -gt 0) {
             throw "Generated JSON string was completely empty."
         }
 
-        # STEP B: Write to a temporary file.
+        # Write to a temporary file
         Set-Content -Path $TempFile -Value $jsonOutput -Force -ErrorAction Stop
 
-        # STEP C: Atomic Swap. Instantly replace the live file.
+        # Swap temporary file with live file
         Move-Item -Path $TempFile -Destination $HistoryFile -Force -ErrorAction Stop
 
     } catch {
