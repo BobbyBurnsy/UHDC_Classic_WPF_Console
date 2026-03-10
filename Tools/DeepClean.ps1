@@ -1,9 +1,7 @@
-# DeepClean.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: A heavy-duty cleanup tool. Silently clears and recreates the
-# MECM (SCCM) cache using PsExec as SYSTEM. It then uses WinRM to force-empty
-# Windows Temp, all User Temp folders, the Recycle Bin, and finally triggers
-# a background Windows Disk Cleanup (cleanmgr /sagerun:1).
-# Optimized for PS 5.1 (.NET Ping to prevent DNS resolution crashes).
+# DeepClean.ps1
+# Silently clears and recreates the MECM (SCCM) cache using PsExec as SYSTEM. 
+# Uses WinRM to empty Windows Temp, all User Temp folders, the Recycle Bin, 
+# and triggers a background Windows Disk Cleanup (cleanmgr /sagerun:1).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -16,7 +14,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -39,11 +37,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -63,7 +58,7 @@ Write-Host "========================================"
 Write-Host " [UHDC] REMOTE DEEP CLEANUP UTILITY"
 Write-Host "========================================`n"
 
-# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# --- 1. Fast Ping Check ---
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -77,9 +72,7 @@ try {
     return
 }
 
-# ------------------------------------------------------------------
-# 2. MECM / SCCM CACHE CLEANUP
-# ------------------------------------------------------------------
+# --- 2. MECM / SCCM Cache Cleanup ---
 Wait-TrainingStep `
     -Desc "STEP 1: PURGE MECM (SCCM) CACHE`n`nWHEN TO USE THIS:`nUse this when Software Center deployments are stuck at 0%, failing with 'hash mismatch' errors, or when the C: drive is critically low on space due to large cached application installers.`n`nWHAT IT DOES:`nWe are using PsExec (running as the SYSTEM account) to forcefully delete and recreate the 'ccmcache' directory, bypassing standard permission blocks.`n`nIN-PERSON EQUIVALENT:`nOpen Control Panel > Configuration Manager > Cache tab > Configure Settings > Delete Files." `
     -Code "psexec.exe \\$Target -s cmd /c `"rd /s /q C:\Windows\ccmcache & mkdir C:\Windows\ccmcache`""
@@ -102,9 +95,7 @@ if (Test-Path $psExecPath) {
     Write-Host "        Please ensure the UHDC console has downloaded it to the \Core folder."
 }
 
-# ------------------------------------------------------------------
-# 3. TEMP FOLDERS & RECYCLE BIN
-# ------------------------------------------------------------------
+# --- 3. Temp Folders & Recycle Bin ---
 Wait-TrainingStep `
     -Desc "STEP 2: CLEAR TEMP FOLDERS & RECYCLE BIN`n`nWHEN TO USE THIS:`nUse this when a user is experiencing bizarre application glitches (like Office apps crashing), cannot open certain files, or needs immediate disk space recovery.`n`nWHAT IT DOES:`nWe are establishing a WinRM session to recursively delete files in 'C:\Windows\Temp', iterate through every user profile to clear their 'AppData\Local\Temp' folders, and forcefully empty the Recycle Bin.`n`nIN-PERSON EQUIVALENT:`nPress Win+R, type '%temp%', select all files, and delete. Repeat for 'C:\Windows\Temp'. Finally, right-click the Recycle Bin on the desktop and select 'Empty Recycle Bin'." `
     -Code "Invoke-Command -ComputerName $Target -ScriptBlock {`n    Remove-Item -Path 'C:\Windows\Temp\*' -Recurse -Force`n    Remove-Item -Path 'C:\Users\*\AppData\Local\Temp\*' -Recurse -Force`n    Clear-RecycleBin -Force`n}"
@@ -131,9 +122,7 @@ try {
     Write-Host "     $($_.Exception.Message)"
 }
 
-# ------------------------------------------------------------------
-# 4. DISK CLEANUP (SAGERUN)
-# ------------------------------------------------------------------
+# --- 4. Disk Cleanup (Sagerun) ---
 Wait-TrainingStep `
     -Desc "STEP 3: TRIGGER BACKGROUND DISK CLEANUP`n`nWHEN TO USE THIS:`nUse this for general PC maintenance, post-Windows Update cleanup, or to safely remove old Windows installation files (Windows.old) without interrupting the user.`n`nWHAT IT DOES:`nWe are remotely triggering the native Windows Disk Cleanup utility ('cleanmgr.exe') using the '/sagerun:1' flag, which runs a pre-configured, silent deep clean in the background.`n`nIN-PERSON EQUIVALENT:`nOpen the Start Menu, search for 'Disk Cleanup', select the C: drive, click 'Clean up system files', check all the boxes, and click OK." `
     -Code "Invoke-Command -ComputerName $Target -ScriptBlock { Start-Process -FilePath 'cleanmgr.exe' -ArgumentList '/sagerun:1' -WindowStyle Hidden }"
@@ -151,13 +140,12 @@ try {
 
 Write-Host "`n [UHDC SUCCESS] Deep Clean complete on $Target."
 
-# --- AUDIT LOG INJECTION ---
+# --- Audit Log ---
 if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
     $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
     if (Test-Path $AuditHelper) {
         & $AuditHelper -Target $Target -Action "Deep Clean (CCM/Temp/Recycle/Sagerun) executed" -SharedRoot $SharedRoot
     }
 }
-# ---------------------------
 
 Write-Host "========================================`n"
