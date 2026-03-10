@@ -1,10 +1,7 @@
-# BrowserReset.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: A professional remediation tool that completely resets Chrome
-# and Edge browser profiles for a specific user on a remote machine.
-# It backs up their bookmarks, forcefully terminates locked browser processes,
-# deletes the corrupted AppData profiles (wiping cookies, history, and cache),
-# and then restores the bookmarks to a fresh profile.
-# Optimized for PS 5.1 (.NET Ping & WPF Training Mode Fix).
+# BrowserReset.ps1
+# Resets Chrome and Edge browser profiles for a specific user on a remote machine.
+# Backs up bookmarks, terminates browser processes, deletes the AppData profiles 
+# (wiping cookies, history, and cache), and restores the bookmarks.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -20,7 +17,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -43,11 +40,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -61,16 +55,14 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     } catch { }
 }
 
-# ------------------------------------------------------------------
-# 1. VALIDATION & FALLBACKS
-# ------------------------------------------------------------------
+# --- 1. Validation & Fallbacks ---
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "##########################################################"
 Write-Host "#        [UHDC] BROWSER PROFILE RESET UTILITY            #"
 Write-Host "##########################################################`n"
 
-# Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# Fast Ping Check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -93,7 +85,7 @@ if ([string]::IsNullOrWhiteSpace($TargetUser)) {
 
 Write-Host " [UHDC] Target set to $TargetUser. Awaiting technician confirmation..."
 
-# The GUI Safety Gate
+# GUI Safety Prompt
 Add-Type -AssemblyName Microsoft.VisualBasic
 $conf = [Microsoft.VisualBasic.Interaction]::InputBox("WARNING: This will DELETE all Passwords, History, and Cookies for $TargetUser on $Target.`n`nOnly Bookmarks will be preserved.`n`nType 'CONFIRM' to proceed:", "Confirm Browser Reset", "")
 
@@ -102,9 +94,7 @@ if ($conf -ne "CONFIRM") {
     return
 }
 
-# ------------------------------------------------------------------
-# 2. SETUP & BACKUP BOOKMARKS
-# ------------------------------------------------------------------
+# --- 2. Setup & Backup Bookmarks ---
 $localBackup = "C:\UHDC\Backups\BrowserReset_$Target"
 if (-not (Test-Path $localBackup)) { New-Item -ItemType Directory -Path $localBackup -Force | Out-Null }
 
@@ -119,9 +109,7 @@ Write-Host " [UHDC] [1/4] Securing user bookmarks..."
 if (Test-Path "$cRoot\Default\Bookmarks") { Copy-Item "$cRoot\Default\Bookmarks" "$localBackup\Chrome_BM" -Force }
 if (Test-Path "$eRoot\Default\Bookmarks") { Copy-Item "$eRoot\Default\Bookmarks" "$localBackup\Edge_BM" -Force }
 
-# ------------------------------------------------------------------
-# 3. KILL PROCESSES
-# ------------------------------------------------------------------
+# --- 3. Kill Processes ---
 Wait-TrainingStep `
     -Desc "STEP 2: TERMINATE BROWSER PROCESSES`n`nWe must forcefully terminate any running instances of Chrome or Edge. If the browser is open (or running in the background), Windows will lock the AppData files and prevent us from deleting them.`n`nIN-PERSON EQUIVALENT:`nIf you were at the user's desk, you would press Ctrl+Shift+Esc to open Task Manager, locate all 'Google Chrome' and 'Microsoft Edge' processes, right-click them, and select 'End task'." `
     -Code "psexec.exe \\$Target -s taskkill /F /IM chrome.exe /IM msedge.exe /T"
@@ -137,9 +125,7 @@ if (Test-Path $psExecPath) {
     Write-Host "        Please ensure the UHDC console has downloaded it to the \Core folder."
 }
 
-# ------------------------------------------------------------------
-# 4. DELETE APPDATA FOLDERS
-# ------------------------------------------------------------------
+# --- 4. Delete AppData Folders ---
 Wait-TrainingStep `
     -Desc "STEP 3: PURGE CORRUPTED PROFILES`n`nWe are deleting the entire 'User Data' directory for both browsers. This permanently wipes the corrupted cache, cookies, history, and extensions.`n`nIN-PERSON EQUIVALENT:`nIf you were at the user's desk, you would navigate to '%LocalAppData%\Google\Chrome\' and permanently delete the 'User Data' folder. You would then repeat this for '%LocalAppData%\Microsoft\Edge\'." `
     -Code "Remove-Item '\\$Target\c$\Users\$TargetUser\AppData\Local\Google\Chrome\User Data' -Recurse -Force"
@@ -148,9 +134,7 @@ Write-Host " [UHDC] [3/4] Purging corrupted AppData profiles..."
 if (Test-Path $cRoot) { Remove-Item $cRoot -Recurse -Force -ErrorAction SilentlyContinue }
 if (Test-Path $eRoot) { Remove-Item $eRoot -Recurse -Force -ErrorAction SilentlyContinue }
 
-# ------------------------------------------------------------------
-# 5. RESTORE BOOKMARKS
-# ------------------------------------------------------------------
+# --- 5. Restore Bookmarks ---
 Wait-TrainingStep `
     -Desc "STEP 4: RESTORE BOOKMARKS`n`nWe are recreating the 'Default' profile directory structure and copying the backed-up Bookmarks file back into place before the user opens the browser again.`n`nIN-PERSON EQUIVALENT:`nIf you were at the user's desk, you would open Chrome once to let it automatically recreate the default folders, close the browser, and then copy the saved 'Bookmarks' file from the Desktop back into the 'Default' folder." `
     -Code "New-Item -ItemType Directory -Path '\\$Target\c$\Users\$TargetUser\AppData\Local\Google\Chrome\User Data\Default' -Force`nCopy-Item 'C:\UHDC\Backups\BrowserReset_$Target\Chrome_BM' '\\$Target\...\Default\Bookmarks' -Force"
@@ -167,7 +151,7 @@ if (Test-Path "$localBackup\Edge_BM") {
 
 Write-Host "`n [UHDC SUCCESS] $TargetUser's browsers have been successfully reset on $Target."
 
-# --- AUDIT LOG INJECTION ---
+# --- Audit Log ---
 if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
     $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
     if (Test-Path $AuditHelper) {
@@ -176,6 +160,5 @@ if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
 } else {
     Write-Host " [UHDC] [i] Audit log skipped (No SharedRoot mapped)." -ForegroundColor Yellow
 }
-# ---------------------------
 
 Write-Host "========================================================`n"
