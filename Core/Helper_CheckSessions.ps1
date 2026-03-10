@@ -1,10 +1,6 @@
-# Helper_CheckSessions.ps1 - Place this script in the \Core folder
-# DESCRIPTION: Queries a remote computer to retrieve a list of all currently 
-# active and disconnected user sessions. This allows technicians to safely 
-# verify who is physically or remotely logged into a machine before initiating 
-# disruptive actions like forced logoffs or reboots. Includes an automated 
-# PsExec fallback to bypass strict Windows Firewall RPC blocks.
-# Optimized for PS 5.1 (.NET Ping & Training Mode Integration).
+# Helper_CheckSessions.ps1
+# Queries a remote computer to retrieve a list of active and disconnected user sessions.
+# Includes an automated PsExec fallback to bypass Windows Firewall RPC blocks.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -17,7 +13,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -40,11 +36,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -67,7 +60,7 @@ Write-Host "========================================"
 Write-Host " [UHDC] SESSION CHECK: $Target"
 Write-Host "========================================"
 
-# --- 1. FAST PING CHECK (PS 5.1 Safe) ---
+# --- 1. Fast Ping Check ---
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 $isOnline = $false
 
@@ -83,11 +76,10 @@ if (-not $isOnline) {
     return
 }
 
-# Helper variables
 $UpdateHelper = if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) { Join-Path -Path $SharedRoot -ChildPath "Core\Helper_UpdateHistory.ps1" } else { $null }
 $psExecPath = if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) { Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe" } else { $null }
 
-# --- 2. WMI CONSOLE CHECK (Physical Login) ---
+# --- 2. WMI Console Check ---
 Write-Host " [UHDC] [i] Querying physical console user..."
 
 Wait-TrainingStep `
@@ -101,11 +93,11 @@ try {
     if ($rawUser) {
         Write-Host "  > Console User: $rawUser" 
 
-        # INTELLIGENCE INJECTION: Strip domain and update history!
+        # Update History
         if ($UpdateHelper -and (Test-Path $UpdateHelper)) {
             $cleanUser = ($rawUser -split "\\")[-1].Trim()
             & $UpdateHelper -User $cleanUser -Computer $Target -SharedRoot $SharedRoot
-            Write-Host "  > [UHDC INTEL] History map updated for $cleanUser." -ForegroundColor DarkGray
+            Write-Host "  > [UHDC] History map updated for $cleanUser." -ForegroundColor DarkGray
         }
     } else {
         Write-Host "  > Console User: [Nobody is physically logged in]"
@@ -114,7 +106,7 @@ try {
     Write-Host "  > [!] WMI Query Failed: RPC unavailable or Access Denied." 
 }
 
-# --- 3. TERMINAL/RDP SESSION CHECK (quser) ---
+# --- 3. Terminal/RDP Session Check ---
 Write-Host "`n [UHDC] [i] Querying terminal/background sessions..."
 
 Wait-TrainingStep `
@@ -122,23 +114,19 @@ Wait-TrainingStep `
     -Code "`$quserOutput = quser /server:`$Target 2>&1`nif (`$quserOutput -match 'Error') {`n    `$quserOutput = & `$psExecPath /accepteula \\`$Target -s quser 2>&1`n}"
 
 try {
-    # We capture the output and the error stream (2>&1)
     $quserOutput = quser /server:$Target 2>&1
 
-    # [UHDC] PSEXEC FALLBACK INJECTION
-    # If the firewall blocks RPC, native quser fails. We bypass it using PsExec.
+    # PsExec Fallback
     if ($quserOutput -match "Error" -or $quserOutput -match "RPC") {
         Write-Host "  > [i] RPC Blocked by Firewall. Attempting PsExec bypass..." -ForegroundColor DarkGray
 
         if ($psExecPath -and (Test-Path $psExecPath)) {
-            # Run quser locally on the target and stream it back
             $quserOutput = & $psExecPath /accepteula \\$Target -s quser 2>&1
         } else {
             Write-Host "  > [!] ERROR: psexec.exe missing from \Core. Cannot bypass firewall."
         }
     }
 
-    # Check if the output contains the standard "No User exists" error
     if ($quserOutput -match "No User exists") {
         Write-Host "  > No background or remote sessions found."
     } 
@@ -146,19 +134,17 @@ try {
         Write-Host "  > [!] Target refused connection. Unable to verify sessions."
     }
     else {
-        # Print the valid session table cleanly
         foreach ($line in $quserOutput) {
-            # Filter out standard PsExec startup noise
             if ($line -match "PsExec v" -or $line -match "Sysinternals" -or $line -match "Copyright" -or $line -match "starting on" -or $line -match "exited with error code") { continue }
 
             Write-Host "  $line"
 
-            # INTELLIGENCE INJECTION: Regex to parse active RDP users and update history!
+            # Update History
             if ($line -match "^\s*>?([a-zA-Z0-9_\.-]+)\s+.*Active") {
                 $qUser = $matches[1]
                 if ($qUser -ne "services" -and $UpdateHelper -and (Test-Path $UpdateHelper)) {
                     & $UpdateHelper -User $qUser -Computer $Target -SharedRoot $SharedRoot
-                    Write-Host "  > [UHDC INTEL] History map updated for $qUser." -ForegroundColor DarkGray
+                    Write-Host "  > [UHDC] History map updated for $qUser." -ForegroundColor DarkGray
                 }
             }
         }
