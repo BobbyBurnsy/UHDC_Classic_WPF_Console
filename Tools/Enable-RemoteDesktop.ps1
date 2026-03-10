@@ -1,8 +1,7 @@
-# Enable-RemoteDesktop.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Remotely enables RDP on the target machine by modifying the registry (fDenyTSConnections),
-# opening the Windows Firewall for the Remote Desktop profile, and ensuring the TermService is running.
-# Features an automated PsExec fallback if WinRM is blocked by the firewall.
-# Optimized for PS 5.1 (.NET Ping, WPF Training Mode Fix, & PsExec Fallback).
+# Enable-RemoteDesktop.ps1
+# Remotely enables RDP on the target machine by modifying the registry,
+# opening the Windows Firewall, and ensuring the TermService is running.
+# Includes a PsExec fallback if WinRM is blocked.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -15,7 +14,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -38,11 +37,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -62,7 +58,7 @@ Write-Host "========================================"
 Write-Host " [UHDC] REMOTE DESKTOP CONFIGURATION"
 Write-Host "========================================"
 
-# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# --- 1. Fast Ping Check ---
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -76,13 +72,11 @@ try {
     return
 }
 
-# 2. Execute RDP Enable Steps
+# --- 2. Execute RDP Enable Steps ---
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
-    # ------------------------------------------------------------------
-    # STEP 1: REGISTRY MODIFICATION (WinRM)
-    # ------------------------------------------------------------------
+    # Registry Modification
     Wait-TrainingStep `
         -Desc "STEP 1: ENABLE RDP IN REGISTRY`n`nWHEN TO USE THIS:`nUse this when you need to establish a Remote Desktop connection to a PC, but the feature is currently disabled in the system settings.`n`nWHAT IT DOES:`nWe are remotely modifying the 'fDenyTSConnections' registry key. Changing this value from 1 (Deny) to 0 (Allow) tells Windows to accept incoming Terminal Services (RDP) connections.`n`nIN-PERSON EQUIVALENT:`nOpen System Properties (sysdm.cpl) > Remote tab > Select 'Allow remote connections to this computer'." `
         -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 }"
@@ -92,9 +86,7 @@ try {
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -ErrorAction Stop
     }
 
-    # ------------------------------------------------------------------
-    # STEP 2: FIREWALL CONFIGURATION (WinRM)
-    # ------------------------------------------------------------------
+    # Firewall Configuration
     Wait-TrainingStep `
         -Desc "STEP 2: OPEN WINDOWS FIREWALL`n`nWHEN TO USE THIS:`nUse this when RDP is enabled in the registry, but connections are still timing out because the local Windows Defender Firewall is blocking port 3389.`n`nWHAT IT DOES:`nWe are using the NetSecurity module to enable the predefined 'Remote Desktop' firewall rule group across the active network profiles.`n`nIN-PERSON EQUIVALENT:`nOpen Windows Defender Firewall > 'Allow an app or feature through Windows Defender Firewall' > Check the box for 'Remote Desktop'." `
         -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' }"
@@ -104,9 +96,7 @@ try {
         Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue | Out-Null
     }
 
-    # ------------------------------------------------------------------
-    # STEP 3: SERVICE CONFIGURATION (WinRM)
-    # ------------------------------------------------------------------
+    # Service Configuration
     Wait-TrainingStep `
         -Desc "STEP 3: START TERMINAL SERVICE`n`nWHEN TO USE THIS:`nUse this to ensure the underlying Remote Desktop Service is actually running and actively listening for connections.`n`nWHAT IT DOES:`nWe are configuring the 'TermService' to start automatically on boot, and then forcefully starting it right now.`n`nIN-PERSON EQUIVALENT:`nOpen Services (services.msc), locate 'Remote Desktop Services', right-click and select Properties, change Startup type to 'Automatic', and click 'Start'." `
         -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Set-Service -Name 'TermService' -StartupType Automatic; Start-Service -Name 'TermService' }"
@@ -120,19 +110,16 @@ try {
     Write-Host "`n [UHDC SUCCESS] RDP Enabled, Firewall Opened, and Service Started!"
     Write-Host " [UHDC] [i] You can try connecting using MSRA or RDP now."
 
-    # --- AUDIT LOG INJECTION ---
+    # --- Audit Log ---
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) {
             & $AuditHelper -Target $Target -Action "Remote Desktop Enabled (WinRM)" -SharedRoot $SharedRoot
         }
     }
-    # ---------------------------
 
 } catch {
-    # ------------------------------------------------------------------
-    # PSEXEC FALLBACK
-    # ------------------------------------------------------------------
+    # --- PsExec Fallback ---
     Write-Host "  > [i] WinRM Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
@@ -144,7 +131,6 @@ try {
             -Code "`$cmdChain = 'cmd /c `"reg add \`"HKLM\System\CurrentControlSet\Control\Terminal Server\`" /v fDenyTSConnections /t REG_DWORD /d 0 /f & netsh advfirewall firewall set rule group=\`"Remote Desktop\`" new enable=Yes & sc config TermService start= auto & net start TermService`"'`n& `$psExecPath /accepteula \\`$Target -s `$cmdChain"
 
         # Execute chained command via PsExec
-        # Note: Escaping quotes inside the cmd string is critical here
         $cmdChain = 'cmd /c "reg add \"HKLM\System\CurrentControlSet\Control\Terminal Server\" /v fDenyTSConnections /t REG_DWORD /d 0 /f & netsh advfirewall firewall set rule group=\"Remote Desktop\" new enable=Yes & sc config TermService start= auto & net start TermService"'
 
         Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s $cmdChain" -Wait -NoNewWindow
@@ -152,7 +138,7 @@ try {
         Write-Host "`n [UHDC SUCCESS] RDP Enabled, Firewall Opened, and Service Started via PsExec!"
         Write-Host " [UHDC] [i] You can try connecting using MSRA or RDP now."
 
-        # --- AUDIT LOG INJECTION (Fallback) ---
+        # --- Audit Log (Fallback) ---
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) { 
