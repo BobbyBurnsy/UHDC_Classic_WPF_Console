@@ -1,9 +1,8 @@
-# IntuneMenu.ps1 - Place this script in the \Core folder
-# DESCRIPTION: A dedicated helper script for Microsoft Intune management.
-# It takes the target user's email address or the computer's hostname and
+# IntuneMenu.ps1
+# A dedicated helper script for Microsoft Intune management.
+# Takes the target user's email address or the computer's hostname and
 # constructs the direct URL to open the Microsoft Endpoint Manager portal.
-# Features strict Cross-Agency Domain Filtering to prevent unauthorized access.
-# Optimized for PowerShell 5.1 (TLS 1.2 Enforcement & Base64 Theme Decoding).
+# Features Cross-Agency Domain Filtering to prevent unauthorized access.
 
 param(
     [Parameter(Mandatory=$false)]
@@ -22,7 +21,7 @@ param(
     [string]$ThemeB64
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -44,11 +43,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER & DOMAIN FILTERING
-# ------------------------------------------------------------------
+# --- Load Configuration & Domain Filtering ---
 $OrgName = "IT"
 try {
     $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -68,9 +64,7 @@ if (-not $TechUPN) {
 }
 $TechDomain = if ($TechUPN -match "@(.*)$") { $matches[1] } else { "" }
 
-# ------------------------------------------------------------------
-# THEME ENGINE INTEGRATION
-# ------------------------------------------------------------------
+# --- Theme Engine Integration ---
 $ActiveColors = @{
     BG_Main = "#1E1E1E"; BG_Sec  = "#111111"; BG_Con  = "#0C0C0C"
     BG_Btn  = "#2D2D30"; Acc_Pri = "#00A2ED"; Acc_Sec = "#00FF00"
@@ -91,9 +85,7 @@ if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
     } catch {}
 }
 
-# ------------------------------------------------------------------
-# GRAPH API AUTHENTICATION
-# ------------------------------------------------------------------
+# --- Graph API Authentication ---
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $scopes = @(
@@ -116,9 +108,7 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
 
 Add-Type -AssemblyName PresentationFramework
 
-# ------------------------------------------------------------------
-# UI DEFINITION (DYNAMIC XAML)
-# ------------------------------------------------------------------
+# --- UI Definition (XAML) ---
 [string]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -330,9 +320,7 @@ $BtnAddPhone  = $Form.FindName("BtnAddPhone")
 $ResolvedUser = $null
 $GlobalDevices = @()
 
-# ------------------------------------------------------------------
-# INITIALIZATION
-# ------------------------------------------------------------------
+# --- Initialization ---
 $Form.Add_Loaded({
     if ([string]::IsNullOrWhiteSpace($TargetUser) -and [string]::IsNullOrWhiteSpace($TargetComputer)) {
         $HeaderTitle.Text = "Error: No User or Computer provided from GUI."
