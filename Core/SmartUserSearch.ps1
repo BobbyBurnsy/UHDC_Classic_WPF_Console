@@ -1,8 +1,6 @@
-# SmartUserSearch.ps1 - Place this script in the \Core folder
-# DESCRIPTION: The core intelligence engine for the AD User Intelligence panel.
-# It queries Active Directory for account details, OR accepts a Computer name
+# SmartUserSearch.ps1
+# Queries Active Directory for account details, or accepts a Computer name
 # to cross-reference the central UserHistory.json database.
-# Fully PS 5.1 Compatible.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -15,10 +13,10 @@ param(
     [hashtable]$SyncHash,
 
     [Parameter(Mandatory=$false)]
-    [string]$ThemeB64 # Added to prevent ParameterBinding crashes
+    [string]$ThemeB64
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -41,11 +39,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -67,12 +62,9 @@ if ([string]::IsNullOrWhiteSpace($TargetUser)) {
     return
 }
 
-# DYNAMIC PATHING
 $HistoryFile = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json"
 
-# ====================================================================
-# PHASE 1: GENERATE THE HISTORY REPORT (Dual-Search)
-# ====================================================================
+# --- 1. Generate History Report ---
 $userHistory = @()
 $computerHistory = @()
 $dbStatus = "OK"
@@ -94,7 +86,7 @@ if (Test-Path $HistoryFile) {
             $seenUser = @{}
 
             foreach ($entry in $raw) {
-                # 1. Check if the input is a User
+                # Check if the input is a User
                 if ("$($entry.User)".Trim() -eq "$TargetUser".Trim()) {
                     $pc = "$($entry.Computer)".Trim()
                     if (-not $seenPC.ContainsKey($pc)) {
@@ -103,7 +95,7 @@ if (Test-Path $HistoryFile) {
                     }
                 }
 
-                # 2. Check if the input is a Computer (Using -match for partial names)
+                # Check if the input is a Computer
                 if ("$($entry.Computer)".Trim() -match "$TargetUser".Trim()) {
                     $usr = "$($entry.User)".Trim()
                     if (-not $seenUser.ContainsKey($usr)) {
@@ -118,9 +110,7 @@ if (Test-Path $HistoryFile) {
     $dbStatus = "NO FILE"
 }
 
-# ====================================================================
-# PHASE 2: ACTIVE DIRECTORY QUERY
-# ====================================================================
+# --- 2. Active Directory Query ---
 $adObj = $null
 
 Wait-TrainingStep `
@@ -132,12 +122,10 @@ try {
     $adObj = Get-ADUser -Identity $TargetUser -Properties Office, Title, Department, EmailAddress, PasswordLastSet, LastLogonDate, LockedOut, Enabled, MemberOf, PasswordNeverExpires -ErrorAction Stop
 } catch {}
 
-# ====================================================================
-# PHASE 3: INTELLIGENT OUTPUT GENERATION
-# ====================================================================
+# --- 3. Output Generation ---
 
 if ($adObj) {
-    # --- OUTPUT A STANDARD AD USER REPORT ---
+    # Output AD User Report
     $expiryDate = "N/A"; $daysLeftStr = "N/A"
 
     if ($adObj.PasswordNeverExpires) {
@@ -212,7 +200,7 @@ if ($adObj) {
             $i++
         }
 
-        # GUI MAGIC: Auto-fill Action panel
+        # Update GUI Target
         Write-Host "`n[GUI:UPDATE_TARGET:$($userHistory[0].Computer)]"
 
     } else {
@@ -221,7 +209,7 @@ if ($adObj) {
     Write-Host "`n========================================================`n"
 
 } elseif ($computerHistory.Count -gt 0) {
-    # --- OUTPUT A COMPUTER HISTORY REPORT ---
+    # Output Computer History Report
     Write-Host "`n========================================================"
     Write-Host " [UHDC] DEVICE HISTORY REPORT"
     Write-Host "========================================================"
@@ -237,12 +225,12 @@ if ($adObj) {
         $i++
     }
 
-    # GUI MAGIC: Move the target PC name to the Action panels!
+    # Update GUI Target
     Write-Host "`n[GUI:UPDATE_TARGET:$($computerHistory[0].Computer)]"
     Write-Host "`n========================================================`n"
 
 } else {
-    # --- NO MATCHES FOUND ---
+    # No Matches Found
     Write-Host "`n========================================================"
     Write-Host " [UHDC] SEARCH RESULT: $TargetUser"
     Write-Host "========================================================"
