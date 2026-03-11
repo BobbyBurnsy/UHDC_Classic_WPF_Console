@@ -1,9 +1,7 @@
-# RestartPC.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Provides a dark-themed GUI menu to send power commands (Restart,
-# Shutdown, Logoff) to a remote target. It utilizes PsExec to execute native
-# shutdown.exe commands locally on the target, effectively bypassing common WMI
-# and RPC firewall blocks.
-# Optimized for PS 5.1 (WPF Dialog Fix, Base64 Themes, .NET Ping).
+# RestartPC.ps1
+# Provides a themed GUI menu to send power commands (Restart, Shutdown, Logoff)
+# to a remote target. Utilizes PsExec to execute native shutdown.exe commands
+# locally on the target, bypassing common WMI and RPC firewall blocks.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -19,7 +17,7 @@ param(
     [string]$ThemeB64
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -41,11 +39,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -59,9 +54,7 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     } catch { }
 }
 
-# ------------------------------------------------------------------
-# THEME ENGINE INTEGRATION
-# ------------------------------------------------------------------
+# --- Theme Engine ---
 $ActiveColors = @{
     BG_Main = "#1E1E1E"; BG_Sec  = "#111111"; BG_Con  = "#0C0C0C"
     BG_Btn  = "#2D2D30"; Acc_Pri = "#00A2ED"; Acc_Sec = "#00FF00"
@@ -84,9 +77,7 @@ if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
 
 Add-Type -AssemblyName PresentationFramework
 
-# ------------------------------------------------------------------
-# CUSTOM THEMED INPUT BOX FUNCTION
-# ------------------------------------------------------------------
+# --- Custom Themed Input Box ---
 function Show-DarkInputBox {
     param([string]$Title, [string]$Prompt, [string]$DefaultText = "")
 
@@ -131,9 +122,7 @@ function Show-DarkInputBox {
     return $null
 }
 
-# ------------------------------------------------------------------
-# 1. TARGET VALIDATION
-# ------------------------------------------------------------------
+# --- 1. Target Validation ---
 if ([string]::IsNullOrWhiteSpace($Target)) {
     $Target = Show-DarkInputBox -Title "Target Required" -Prompt "Enter Target PC to Restart/Logoff:"
 
@@ -165,9 +154,7 @@ if (-not (Test-Path $psExecPath)) {
     return
 }
 
-# ------------------------------------------------------------------
-# 2. BUILD GRAPHICAL MENU OPTIONS
-# ------------------------------------------------------------------
+# --- 2. Graphical Menu Options ---
 $MenuOptions = @(
     [PSCustomObject]@{ Action = "1. Standard Restart"; Command = "Restart"; Description = "Reboots in 60 seconds. Prompts user to save work." }
     [PSCustomObject]@{ Action = "2. Force Restart"; Command = "ForceRestart"; Description = "Immediate reboot. Unsaved work WILL be lost." }
@@ -237,9 +224,7 @@ if ($MenuWin.ShowDialog() -ne $true -or -not $Selection) {
     return
 }
 
-# ------------------------------------------------------------------
-# 3. EXECUTE SELECTED ACTION VIA PSEXEC
-# ------------------------------------------------------------------
+# --- 3. Execute Selected Action ---
 try {
     switch ($Selection.Command) {
         "Restart" {
@@ -274,6 +259,7 @@ try {
         }
     }
 
+    # --- Audit Log ---
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) {
