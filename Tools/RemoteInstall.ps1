@@ -1,8 +1,7 @@
-# RemoteInstall.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Provides a themed GUI interface to manage and silently deploy
-# software to a remote target using PsExec (SYSTEM context). Supports saving commonly
-# used application UNC paths and silent installation arguments to a central JSON library.
-# Optimized for PS 5.1 (WPF Dialog Fix, JSON Array Protection, Base64 Themes).
+# RemoteInstall.ps1
+# Provides a themed GUI interface to manage and silently deploy software to a 
+# remote target using PsExec (SYSTEM context). Supports saving commonly used 
+# application UNC paths and silent installation arguments to a central JSON library.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -18,7 +17,7 @@ param(
     [string]$ThemeB64
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -40,11 +39,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -63,9 +59,7 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
-# ------------------------------------------------------------------
-# THEME ENGINE INTEGRATION (Base64 Decoding for PS 5.1 Safety)
-# ------------------------------------------------------------------
+# --- Theme Engine Integration ---
 $ActiveColors = @{
     BG_Main = "#1E1E1E"; BG_Sec  = "#111111"; BG_Con  = "#0C0C0C"
     BG_Btn  = "#2D2D30"; Acc_Pri = "#00A2ED"; Acc_Sec = "#00FF00"
@@ -90,7 +84,7 @@ Write-Host "========================================"
 Write-Host " [UHDC] REMOTE SILENT INSTALLER: $Target"
 Write-Host "========================================"
 
-# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# --- 1. Fast Ping Check ---
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -104,7 +98,7 @@ try {
     return
 }
 
-# 2. Setup Paths & Library Functions
+# --- 2. Setup Paths & Library Functions ---
 $LibraryFile = Join-Path -Path $SharedRoot -ChildPath "Core\SoftwareLibrary.json"
 
 function Load-Lib {
@@ -139,9 +133,7 @@ function Save-Lib {
 
 Add-Type -AssemblyName PresentationFramework
 
-# ------------------------------------------------------------------
-# CUSTOM THEMED INPUT BOX FUNCTION (PS 5.1 WPF Fix)
-# ------------------------------------------------------------------
+# --- Custom Themed Input Box Function ---
 function Show-ThemedInputBox {
     param([string]$Title, [string]$Prompt, [string]$DefaultText = "")
 
@@ -184,9 +176,7 @@ function Show-ThemedInputBox {
     return $null
 }
 
-# ------------------------------------------------------------------
-# 3. MAIN MENU LOOP
-# ------------------------------------------------------------------
+# --- 3. Main Menu Loop ---
 $installer = $null
 
 while ($true) {
@@ -306,9 +296,7 @@ while ($true) {
     }
 }
 
-# ------------------------------------------------------------------
-# 4. EXECUTE INSTALLATION
-# ------------------------------------------------------------------
+# --- 4. Execute Installation ---
 if ($installer) {
     Write-Host "`n [UHDC] [!] Deploying $($installer.Name) to $Target..."
     Write-Host "      Path: $($installer.Path)"
