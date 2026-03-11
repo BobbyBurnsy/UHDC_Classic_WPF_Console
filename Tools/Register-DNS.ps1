@@ -1,8 +1,7 @@
-# Register-DNS.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Forcefully refreshes the target machine's DNS and NetBIOS registration
-# on the domain controller. It executes 'ipconfig /flushdns', 'ipconfig /registerdns',
+# Register-DNS.ps1
+# Forcefully refreshes the target machine's DNS and NetBIOS registration
+# on the domain controller. Executes 'ipconfig /flushdns', 'ipconfig /registerdns',
 # and 'nbtstat -RR' sequentially via PsExec (SYSTEM context).
-# Optimized for PS 5.1 (.NET Ping to prevent DNS resolution crashes & WPF Training Mode Fix).
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -15,7 +14,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -38,11 +37,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -66,8 +62,7 @@ Write-Host " [UHDC] REMOTE DNS REGISTRATION: $Target"
 Write-Host "========================================`n"
 
 # We do a quick ping, but we don't stop the script if it fails,
-# because if DNS is broken, the ping will naturally fail!
-# PS 5.1 Fix: .NET Ping prevents terminating WMI errors if DNS is completely unresolvable.
+# because if DNS is broken, the ping will naturally fail.
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 $isOnline = $false
 try {
@@ -82,7 +77,6 @@ if (-not $isOnline) {
     Write-Host " [UHDC] [i] Target is reachable. Proceeding..."
 }
 
-# STANDARD PATHING: Rely strictly on the \Core folder as defined by UHDC
 $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
 if (Test-Path $psExecPath) {
@@ -92,14 +86,12 @@ if (Test-Path $psExecPath) {
         Write-Host " [UHDC]  > Registering new DNS Records..."
         Write-Host " [UHDC]  > Refreshing NetBIOS (nbtstat)..."
 
-        # ------------------------------------------------------------------
-        # STEP 1: EXECUTE DNS/WINS REFRESH CHAIN
-        # ------------------------------------------------------------------
+        # --- 1. Execute DNS/WINS Refresh Chain ---
         Wait-TrainingStep `
             -Desc "STEP 1: FLUSH AND REGISTER DNS`n`nWHEN TO USE THIS:`nUse this when a computer is turned on and connected to the network, but you cannot connect to it via hostname (e.g., Remote Desktop or File Shares fail). This usually happens when a user switches from Wi-Fi to a wired docking station, giving the laptop a new IP address, but the Domain Controller still has the old IP address cached (a 'stale' DNS record).`n`nWHAT IT DOES:`nWe are using PsExec to run a chained command as the SYSTEM account on the remote PC. It flushes the PC's local DNS cache, forces the PC to re-register its current IP address with the Domain Controller's DNS server, and refreshes its NetBIOS names.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open an elevated Command Prompt and type 'ipconfig /flushdns', press Enter, type 'ipconfig /registerdns', press Enter, and finally type 'nbtstat -RR'." `
             -Code "psexec.exe \\$Target -s cmd /c `"ipconfig /flushdns & ipconfig /registerdns & nbtstat -RR`""
 
-        # PRO UPGRADE: Chaining the commands with '&' executes them sequentially in a single fast PsExec session!
+        # Chaining the commands with '&' executes them sequentially in a single PsExec session.
         # /accepteula silences the first-run prompt, -s runs as SYSTEM
         $cmdChain = 'cmd /c "ipconfig /flushdns & ipconfig /registerdns & nbtstat -RR"'
 
@@ -108,14 +100,13 @@ if (Test-Path $psExecPath) {
         Write-Host "`n [UHDC SUCCESS] DNS/WINS refresh commands dispatched to $Target."
         Write-Host "             (Note: It may take 5-10 minutes for the Domain Controller to update)"
 
-        # --- AUDIT LOG INJECTION ---
+        # --- Audit Log ---
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
                 & $AuditHelper -Target $Target -Action "Forced Remote DNS Flush & Registration" -SharedRoot $SharedRoot
             }
         }
-        # ---------------------------
 
     } catch {
         Write-Host " [UHDC] [!] ERROR: Failed to execute PsExec. $($_.Exception.Message)"
