@@ -1,8 +1,6 @@
-# Get-Uptime.ps1 - Place this script in the \Tools folder
-# DESCRIPTION: Queries the remote computer's WMI/CIM repository for Win32_OperatingSystem
-# to calculate the exact Last Boot Up Time and current Uptime.
-# Features an automated PsExec fallback to query 'systeminfo' if WMI ports are blocked.
-# Optimized for PS 5.1 (.NET Ping & WPF Training Mode Fix).
+# Get-Uptime.ps1
+# Queries the remote computer's WMI/CIM repository to calculate Last Boot Up Time and Uptime.
+# Includes a PsExec fallback to query 'systeminfo' if WMI is blocked.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -15,7 +13,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- TRAINING MODE HELPER (WPF Safe) ---
+# --- Training Mode Helper ---
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -38,11 +36,8 @@ function Wait-TrainingStep {
         }
     }
 }
-# ----------------------------
 
-# ------------------------------------------------------------------
-# BULLETPROOF CONFIG LOADER (Fallback if run standalone)
-# ------------------------------------------------------------------
+# --- Load Configuration ---
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -62,7 +57,7 @@ Write-Host "========================================"
 Write-Host " [UHDC] UPTIME CHECK: $Target"
 Write-Host "========================================"
 
-# 1. Fast Ping Check (.NET Ping for PS 5.1 Safety)
+# --- 1. Fast Ping Check ---
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -76,7 +71,7 @@ try {
     return
 }
 
-# 2. Execute WMI/CIM Query with PsExec Fallback
+# --- 2. Execute WMI/CIM Query ---
 try {
     Write-Host " [UHDC] [i] Querying $Target via WMI..."
 
@@ -96,19 +91,16 @@ try {
         Write-Host " [UHDC] [!] ATTENTION: Machine has not been rebooted in over 2 weeks." -ForegroundColor Yellow
     }
 
-    # --- AUDIT LOG INJECTION ---
+    # --- Audit Log ---
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) { 
             & $AuditHelper -Target $Target -Action "Checked Uptime ($($uptime.Days) Days)" -SharedRoot $SharedRoot
         }
     }
-    # ---------------------------
 
 } catch {
-    # ------------------------------------------------------------------
-    # PSEXEC FALLBACK
-    # ------------------------------------------------------------------
+    # --- PsExec Fallback ---
     Write-Host "  > [i] WMI Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
@@ -119,12 +111,10 @@ try {
             -Desc "STEP 1 (FALLBACK): PSEXEC SYSTEMINFO`n`nWHEN TO USE THIS:`nThis triggers automatically if the standard WMI query is blocked by the target's Windows Firewall.`n`nWHAT IT DOES:`nWe use PsExec to bypass the WMI block and execute the native 'systeminfo' command directly on the target PC. We pipe the output into 'find' to isolate just the line containing the boot time.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt on the user's PC and typing 'systeminfo | find `"System Boot Time`"'." `
             -Code "`$output = & `$psExecPath /accepteula \\`$Target -s cmd /c 'systeminfo | find `"System Boot Time`"'"
 
-        # Execute systeminfo and capture output/errors
         $sysInfoOutput = & $psExecPath /accepteula \\$Target -s cmd /c 'systeminfo | find "System Boot Time"' 2>&1
 
         $bootTimeFound = $false
         foreach ($line in $sysInfoOutput) {
-            # Filter out standard PsExec startup noise
             if ($line -match "PsExec v" -or $line -match "Sysinternals" -or $line -match "Copyright" -or $line -match "starting on" -or $line -match "exited with error code") { continue }
 
             if ($line -match "System Boot Time:") {
@@ -136,7 +126,7 @@ try {
         if (-not $bootTimeFound) {
             Write-Host "  > [!] PsExec fallback failed. Target may be completely locked down."
         } else {
-            # --- AUDIT LOG INJECTION (Fallback) ---
+            # --- Audit Log (Fallback) ---
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
                 if (Test-Path $AuditHelper) { 
