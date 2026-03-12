@@ -1,5 +1,5 @@
 # Get-Uptime.ps1
-# Queries the remote computer's WMI/CIM repository to calculate Last Boot Up Time and Uptime.
+# Queries the remote computer's WMI/CIM repository to calculate last boot time and uptime.
 # Includes a PsExec fallback to query 'systeminfo' if WMI is blocked.
 
 param(
@@ -13,7 +13,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -32,12 +32,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -54,10 +54,10 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] UPTIME CHECK: $Target"
+Write-Host " [UHDC] Uptime check: $Target"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -71,27 +71,27 @@ try {
     return
 }
 
-# --- 2. Execute WMI/CIM Query ---
+# Execute WMI/CIM query
 try {
     Write-Host " [UHDC] [i] Querying $Target via WMI..."
 
     Wait-TrainingStep `
-        -Desc "STEP 1: QUERY OPERATING SYSTEM UPTIME`n`nWHEN TO USE THIS:`nUse this when a user complains about general system slowness, strange application glitches, or when verifying if a user actually rebooted their PC like you asked them to.`n`nWHAT IT DOES:`nWe establish a remote WMI/CIM session to query the 'Win32_OperatingSystem' class. We extract the 'LastBootUpTime' property (which is a native DateTime object) and subtract it from the current time to calculate exactly how many days, hours, and minutes the PC has been running.`n`nIN-PERSON EQUIVALENT:`nPress Ctrl+Shift+Esc to open Task Manager, click the 'Performance' tab, select 'CPU', and look at the 'Up time' counter at the bottom." `
-        -Code "`$os = Get-CimInstance -ComputerName `$Target -ClassName Win32_OperatingSystem`n`$uptime = (Get-Date) - `$os.LastBootUpTime"
+        -Desc "STEP 1: QUERY OPERATING SYSTEM UPTIME`n`nWHEN TO USE THIS:`nUse this when a user complains about general system slowness, strange application glitches, or when verifying if a user actually rebooted their PC like you asked them to.`n`nWHAT IT DOES:`nWe use PsExec to run the native Windows 'systeminfo' command on the remote machine. This command pulls a massive amount of data, including the exact date and time the OS was last booted.`n`nIN-PERSON EQUIVALENT:`nPress Ctrl+Shift+Esc to open Task Manager, click the 'Performance' tab, select 'CPU', and look at the 'Up time' counter at the bottom." `
+        -Code "psexec.exe \\$Target -s systeminfo"
 
     $os = Get-CimInstance -ComputerName $Target -ClassName Win32_OperatingSystem -ErrorAction Stop
     $boot = $os.LastBootUpTime
     $now = Get-Date
     $uptime = $now - $boot
 
-    Write-Host "  > Last Boot: $($boot.ToString('MM/dd/yyyy HH:mm'))" 
-    Write-Host "  > Uptime:    $($uptime.Days) Days, $($uptime.Hours) Hours, $($uptime.Minutes) Minutes" 
+    Write-Host "  > Last boot: $($boot.ToString('MM/dd/yyyy HH:mm'))" 
+    Write-Host "  > Uptime:    $($uptime.Days) days, $($uptime.Hours) hours, $($uptime.Minutes) minutes" 
 
     if ($uptime.Days -gt 14) {
-        Write-Host " [UHDC] [!] ATTENTION: Machine has not been rebooted in over 2 weeks." -ForegroundColor Yellow
+        Write-Host " [UHDC] [i] Note: Machine has not been rebooted in over 2 weeks." -ForegroundColor Yellow
     }
 
-    # --- Audit Log ---
+    # Audit log
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) { 
@@ -100,16 +100,16 @@ try {
     }
 
 } catch {
-    # --- PsExec Fallback ---
-    Write-Host "  > [i] WMI Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
+    # PsExec fallback
+    Write-Host "  > [i] WMI blocked by firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
     if (Test-Path $psExecPath) {
 
         Wait-TrainingStep `
-            -Desc "STEP 1 (FALLBACK): PSEXEC SYSTEMINFO`n`nWHEN TO USE THIS:`nThis triggers automatically if the standard WMI query is blocked by the target's Windows Firewall.`n`nWHAT IT DOES:`nWe use PsExec to bypass the WMI block and execute the native 'systeminfo' command directly on the target PC. We pipe the output into 'find' to isolate just the line containing the boot time.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt on the user's PC and typing 'systeminfo | find `"System Boot Time`"'." `
-            -Code "`$output = & `$psExecPath /accepteula \\`$Target -s cmd /c 'systeminfo | find `"System Boot Time`"'"
+            -Desc "STEP 1 (FALLBACK): FILTER SYSTEMINFO OUTPUT`n`nWHEN TO USE THIS:`nRunning 'systeminfo' by itself returns way too much text. We only care about the boot time.`n`nWHAT IT DOES:`nWe pipe the output of 'systeminfo' directly into the native Windows 'find' command, searching specifically for the string 'System Boot Time'. This filters the output down to a single, readable line.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt on the user's PC and typing 'systeminfo | find `"System Boot Time`"'." `
+            -Code "psexec.exe \\$Target -s cmd /c `"systeminfo | find 'System Boot Time'`""
 
         $sysInfoOutput = & $psExecPath /accepteula \\$Target -s cmd /c 'systeminfo | find "System Boot Time"' 2>&1
 
@@ -126,7 +126,7 @@ try {
         if (-not $bootTimeFound) {
             Write-Host "  > [!] PsExec fallback failed. Target may be completely locked down."
         } else {
-            # --- Audit Log (Fallback) ---
+            # Audit log (Fallback)
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
                 if (Test-Path $AuditHelper) { 
@@ -135,7 +135,7 @@ try {
             }
         }
     } else {
-        Write-Host "  > [!] ERROR: psexec.exe missing from \Core. Cannot attempt fallback."
+        Write-Host "  > [!] Error: psexec.exe missing from \Core. Cannot attempt fallback."
     }
 }
 

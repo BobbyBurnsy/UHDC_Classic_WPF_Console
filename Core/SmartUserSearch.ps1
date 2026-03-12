@@ -1,6 +1,7 @@
 # SmartUserSearch.ps1
 # Queries Active Directory for account details, or accepts a Computer name
 # to cross-reference the central UserHistory.json database.
+# Uses AES-256 encryption to read the sanitized database.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -16,7 +17,28 @@ param(
     [string]$ThemeB64
 )
 
-# --- Training Mode Helper ---
+# AES-256 encryption engine
+# Static Key and IV for internal tool encryption
+$global:UHDCKey = [byte[]](0x5A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0xAD, 0xBE, 0xCF, 0xD0, 0xE1, 0xF2, 0x03, 0x14, 0x25, 0x36, 0x47, 0x58, 0x69, 0x7A, 0x8B, 0x9C, 0xAD, 0xBE, 0xCF, 0xD0, 0xE1, 0xF2, 0x03)
+$global:UHDCIV  = [byte[]](0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10)
+
+function Unprotect-UHDCData ([string]$EncryptedText) {
+    if ([string]::IsNullOrWhiteSpace($EncryptedText)) { return $EncryptedText }
+    try {
+        $aes = [System.Security.Cryptography.Aes]::Create()
+        $aes.Key = $global:UHDCKey
+        $aes.IV = $global:UHDCIV
+        $decryptor = $aes.CreateDecryptor()
+        $bytes = [Convert]::FromBase64String($EncryptedText)
+        $decrypted = $decryptor.TransformFinalBlock($bytes, 0, $bytes.Length)
+        return [System.Text.Encoding]::UTF8.GetString($decrypted)
+    } catch { 
+        # If it fails to decrypt, it might be legacy plain-text. Return as-is.
+        return $EncryptedText 
+    }
+}
+
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -25,7 +47,6 @@ function Wait-TrainingStep {
         $SyncHash.StepReady = $true
         $SyncHash.StepAck = $false
 
-        # Pause the script until the GUI user clicks Execute or Abort
         while (-not $SyncHash.StepAck) {
             Start-Sleep -Milliseconds 200
             $Dispatcher = [System.Windows.Threading.Dispatcher]::CurrentDispatcher
@@ -35,12 +56,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -64,14 +85,14 @@ if ([string]::IsNullOrWhiteSpace($TargetUser)) {
 
 $HistoryFile = Join-Path -Path $SharedRoot -ChildPath "Core\UserHistory.json"
 
-# --- 1. Generate History Report ---
+# 1. Generate history report
 $userHistory = @()
 $computerHistory = @()
 $dbStatus = "OK"
 
 Wait-TrainingStep `
-    -Desc "STEP 1: CORRELATE USER TO COMPUTER`n`nWHEN TO USE THIS:`nThis is the first step in any remote support scenario. A user calls in with an issue, but they don't know their computer name, making it impossible to remote in or push fixes.`n`nWHAT IT DOES:`nWe are parsing the central 'UserHistory.json' database. We check if your input matches a known Username OR a known Computer Name. If it matches a user, we pull the most recent PC they logged into. We then use a special GUI tag '[GUI:UPDATE_TARGET...]' to automatically fill the 'Target PC' boxes on the right side of the console so you are instantly ready to work.`n`nIN-PERSON EQUIVALENT:`nAsking the user, 'Can you read me the asset tag sticker on the bottom of your laptop?' or having them open the Start Menu, type 'cmd', and run the 'hostname' command." `
-    -Code "`$raw = Get-Content `$HistoryFile -Raw | ConvertFrom-Json`n`$userHistory = `$raw | Where-Object { `$_.User -eq `$TargetUser }`nWrite-Host `"[GUI:UPDATE_TARGET:`$(`$userHistory[0].Computer)]`""
+    -Desc "STEP 1: CORRELATE USER TO COMPUTER`n`nWHEN TO USE THIS:`nThis is the first step in any remote support scenario. A user calls in with an issue, but they don't know their computer name, making it impossible to remote in or push fixes.`n`nWHAT IT DOES:`nWe parse the central 'UserHistory.json' database. Because the database is encrypted to protect PII, we decrypt the entries in memory and check if your input matches a known username or PC name. If it matches, we pull the data and use a special GUI tag to automatically fill the 'Target PC' boxes on the right side of the console.`n`nIN-PERSON EQUIVALENT:`nWithout a database, you would have to ask the user for their PC name, or use PsExec to query a suspected PC to see if they are logged into it." `
+    -Code "psexec.exe \\TARGET-PC quser"
 
 if (Test-Path $HistoryFile) {
     $fItem = Get-Item $HistoryFile
@@ -86,21 +107,26 @@ if (Test-Path $HistoryFile) {
             $seenUser = @{}
 
             foreach ($entry in $raw) {
+                # Decrypt the stored values
+                $decryptedUser = Unprotect-UHDCData $entry.User
+                $decryptedPC   = Unprotect-UHDCData $entry.Computer
+
                 # Check if the input is a User
-                if ("$($entry.User)".Trim() -eq "$TargetUser".Trim()) {
-                    $pc = "$($entry.Computer)".Trim()
-                    if (-not $seenPC.ContainsKey($pc)) {
+                if ($decryptedUser.Trim() -eq $TargetUser.Trim()) {
+                    if (-not $seenPC.ContainsKey($decryptedPC)) {
+                        $entry.Computer = $decryptedPC # Swap encrypted for plain text for display
                         $userHistory += $entry
-                        $seenPC[$pc] = $true
+                        $seenPC[$decryptedPC] = $true
                     }
                 }
 
                 # Check if the input is a Computer
-                if ("$($entry.Computer)".Trim() -match "$TargetUser".Trim()) {
-                    $usr = "$($entry.User)".Trim()
-                    if (-not $seenUser.ContainsKey($usr)) {
+                if ($decryptedPC.Trim() -match $TargetUser.Trim()) {
+                    if (-not $seenUser.ContainsKey($decryptedUser)) {
+                        $entry.User = $decryptedUser # Swap encrypted for plain text for display
+                        $entry.Computer = $decryptedPC
                         $computerHistory += $entry
-                        $seenUser[$usr] = $true
+                        $seenUser[$decryptedUser] = $true
                     }
                 }
             }
@@ -110,22 +136,22 @@ if (Test-Path $HistoryFile) {
     $dbStatus = "NO FILE"
 }
 
-# --- 2. Active Directory Query ---
+# 2. Active Directory query
 $adObj = $null
 
 Wait-TrainingStep `
-    -Desc "STEP 2: QUERY AD & CALCULATE PASSWORD EXPIRATION`n`nWHEN TO USE THIS:`nUse this to instantly verify if an account is locked out, disabled, or if their password is about to expire. It also checks if they have the correct security groups (like VPN or Admin access).`n`nWHAT IT DOES:`nWe use 'Get-ADUser' to pull the account details. Then, we do some math: We query the domain's default password policy ('Get-ADDefaultDomainPasswordPolicy') to find the 'MaxPasswordAge' (e.g., 90 days). We add those 90 days to the user's 'PasswordLastSet' date, and subtract today's date to tell you exactly how many days they have left before they are locked out.`n`nIN-PERSON EQUIVALENT:`nOpening Active Directory Users and Computers (ADUC), searching for the user, checking the 'Account' tab to see if the 'Unlock account' box is checked, and clicking the 'Member Of' tab to read through their assigned groups." `
-    -Code "`$adObj = Get-ADUser -Identity `$TargetUser -Properties LockedOut, PasswordLastSet, MemberOf`n`$policy = Get-ADDefaultDomainPasswordPolicy`n`$expDate = `$adObj.PasswordLastSet.AddDays(`$policy.MaxPasswordAge.Days)"
+    -Desc "STEP 2: QUERY AD ACCOUNT STATUS`n`nWHEN TO USE THIS:`nUse this to instantly verify if an account is locked out, disabled, or if their password is about to expire. It also checks if they have the correct security groups (like VPN or Admin access).`n`nWHAT IT DOES:`nWe query Active Directory to pull the account details, calculate their password expiration date based on the domain policy, and list their security groups.`n`nIN-PERSON EQUIVALENT:`nYou can pull all of this information natively using the built-in 'net user' command in the Windows Command Prompt." `
+    -Code "net user $TargetUser /domain"
 
 try {
     # If this fails, the script assumes the input is a Computer Name
     $adObj = Get-ADUser -Identity $TargetUser -Properties Office, Title, Department, EmailAddress, PasswordLastSet, LastLogonDate, LockedOut, Enabled, MemberOf, PasswordNeverExpires -ErrorAction Stop
 } catch {}
 
-# --- 3. Output Generation ---
+# 3. Output generation
 
 if ($adObj) {
-    # Output AD User Report
+    # Output AD user report
     $expiryDate = "N/A"; $daysLeftStr = "N/A"
 
     if ($adObj.PasswordNeverExpires) {
@@ -152,7 +178,7 @@ if ($adObj) {
     }
 
     Write-Host "`n========================================================"
-    Write-Host " [UHDC] ACCOUNT REPORT: $($adObj.SamAccountName)"
+    Write-Host " [UHDC] Account report: $($adObj.SamAccountName)"
     Write-Host "========================================================"
 
     Write-Host " Name:       $($adObj.Name)"
@@ -167,7 +193,7 @@ if ($adObj) {
     Write-Host " Locked:     " -NoNewline
     if ($adObj.LockedOut) { Write-Host "YES (LOCKED)" } else { Write-Host "No" }
 
-    Write-Host "`n--- Key Access Groups ---"
+    Write-Host "`n--- Key access groups ---"
     if ($adObj.MemberOf) {
         $allGroups = $adObj.MemberOf | ForEach-Object { ($_ -split ",")[0].Replace("CN=","") } | Sort-Object
         $keywords = "M365|Airwatch|VPN|Admin|Polaris"
@@ -177,20 +203,20 @@ if ($adObj) {
         if ($shownGroups) {
             foreach ($g in $shownGroups) { Write-Host " - $g" }
         } else {
-            Write-Host " (No Key Groups Found)"
+            Write-Host " (No key groups found)"
         }
         if ($hiddenCount -gt 0) { Write-Host " ...plus $hiddenCount other standard groups." }
-    } else { Write-Host " (No Groups Found)" }
+    } else { Write-Host " (No groups found)" }
 
-    Write-Host "`n--- Password & Logon ---"
-    Write-Host " Password Set:  $($adObj.PasswordLastSet)"
-    Write-Host " Last Logon:    $($adObj.LastLogonDate)"
-    Write-Host " [UHDC STATUS] Days until expiry: $daysLeftStr"
+    Write-Host "`n--- Password & logon ---"
+    Write-Host " Password set:  $($adObj.PasswordLastSet)"
+    Write-Host " Last logon:    $($adObj.LastLogonDate)"
+    Write-Host " Days to expiry: $daysLeftStr"
 
-    Write-Host "`n--- Known Locations ---"
+    Write-Host "`n--- Known locations ---"
 
     if ($dbStatus -ne "OK") {
-         Write-Host " [UHDC] [!] Database Issue: $dbStatus"
+         Write-Host " [UHDC] [!] Database issue: $dbStatus"
     } elseif ($userHistory.Count -gt 0) {
         $i = 1
         foreach ($loc in $userHistory) {
@@ -200,7 +226,7 @@ if ($adObj) {
             $i++
         }
 
-        # Update GUI Target
+        # Update GUI target
         Write-Host "`n[GUI:UPDATE_TARGET:$($userHistory[0].Computer)]"
 
     } else {
@@ -209,14 +235,14 @@ if ($adObj) {
     Write-Host "`n========================================================`n"
 
 } elseif ($computerHistory.Count -gt 0) {
-    # Output Computer History Report
+    # Output computer history report
     Write-Host "`n========================================================"
-    Write-Host " [UHDC] DEVICE HISTORY REPORT"
+    Write-Host " [UHDC] Device history report"
     Write-Host "========================================================"
     Write-Host " Target PC: $($computerHistory[0].Computer)"
-    Write-Host " AD Profile: (Is a Device)"
+    Write-Host " AD Profile: (Is a device)"
 
-    Write-Host "`n--- Known Users on this Device ---"
+    Write-Host "`n--- Known users on this device ---"
     $i = 1
     foreach ($loc in $computerHistory) {
         Write-Host " [$i] $($loc.User) " -NoNewline
@@ -225,14 +251,14 @@ if ($adObj) {
         $i++
     }
 
-    # Update GUI Target
+    # Update GUI target
     Write-Host "`n[GUI:UPDATE_TARGET:$($computerHistory[0].Computer)]"
     Write-Host "`n========================================================`n"
 
 } else {
-    # No Matches Found
+    # No matches found
     Write-Host "`n========================================================"
-    Write-Host " [UHDC] SEARCH RESULT: $TargetUser"
+    Write-Host " [UHDC] Search result: $TargetUser"
     Write-Host "========================================================"
     Write-Host " [!] No matching user found in Active Directory."
     Write-Host " [!] No matching computer or user found in UserHistory.json."

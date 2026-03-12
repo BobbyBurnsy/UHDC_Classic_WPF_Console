@@ -13,7 +13,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -32,12 +32,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -57,10 +57,10 @@ if ([string]::IsNullOrWhiteSpace($Target)) {
 }
 
 Write-Host "========================================"
-Write-Host " [UHDC] SESSION CHECK: $Target"
+Write-Host " [UHDC] Session check: $Target"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 $isOnline = $false
 
@@ -79,51 +79,51 @@ if (-not $isOnline) {
 $UpdateHelper = if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) { Join-Path -Path $SharedRoot -ChildPath "Core\Helper_UpdateHistory.ps1" } else { $null }
 $psExecPath = if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) { Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe" } else { $null }
 
-# --- 2. WMI Console Check ---
+# WMI console check
 Write-Host " [UHDC] [i] Querying physical console user..."
 
 Wait-TrainingStep `
-    -Desc "STEP 1: QUERY PHYSICAL CONSOLE`n`nWHEN TO USE THIS:`nUse this to see who is physically sitting at the computer right now, or whose profile is actively displayed on the monitor.`n`nWHAT IT DOES:`nWe use WMI to query the 'Win32_ComputerSystem' class and check the 'UserName' property. This specifically returns the user attached to the physical console session.`n`nIN-PERSON EQUIVALENT:`nWalking up to the computer and reading the name on the lock screen or Start Menu." `
-    -Code "`$comp = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName `$Target`n`$rawUser = `$comp.UserName"
+    -Desc "STEP 1: QUERY PHYSICAL CONSOLE`n`nWHEN TO USE THIS:`nUse this to see who is physically sitting at the computer right now, or whose profile is actively displayed on the monitor.`n`nWHAT IT DOES:`nWhile this script uses PowerShell's Get-CimInstance for reliability, you can do this natively using PsExec and the 'wmic' command to query the 'Win32_ComputerSystem' class. This specifically returns the user attached to the physical console session.`n`nIN-PERSON EQUIVALENT:`nWalking up to the computer and reading the name on the lock screen or Start Menu." `
+    -Code "psexec.exe \\$Target -s wmic computersystem get username"
 
 try {
     $comp = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName $Target -ErrorAction Stop
     $rawUser = $comp.UserName
 
     if ($rawUser) {
-        Write-Host "  > Console User: $rawUser" 
+        Write-Host "  > Console user: $rawUser" 
 
-        # Update History
+        # Update history database
         if ($UpdateHelper -and (Test-Path $UpdateHelper)) {
             $cleanUser = ($rawUser -split "\\")[-1].Trim()
             & $UpdateHelper -User $cleanUser -Computer $Target -SharedRoot $SharedRoot
             Write-Host "  > [UHDC] History map updated for $cleanUser." -ForegroundColor DarkGray
         }
     } else {
-        Write-Host "  > Console User: [Nobody is physically logged in]"
+        Write-Host "  > Console user: [Nobody is physically logged in]"
     }
 } catch {
-    Write-Host "  > [!] WMI Query Failed: RPC unavailable or Access Denied." 
+    Write-Host "  > [!] WMI query failed: RPC unavailable or access denied." 
 }
 
-# --- 3. Terminal/RDP Session Check ---
+# Terminal/RDP session check
 Write-Host "`n [UHDC] [i] Querying terminal/background sessions..."
 
 Wait-TrainingStep `
     -Desc "STEP 2: QUERY BACKGROUND SESSIONS`n`nWHEN TO USE THIS:`nUse this to see if anyone is connected via Remote Desktop, or if a previous user locked their screen and walked away instead of signing out (leaving a 'Disconnected' session running in the background).`n`nWHAT IT DOES:`nWe execute the native Windows 'quser' command against the target server. If the Windows Firewall blocks the RPC connection, we automatically fall back to using PsExec to bypass the block and run the command locally on the target.`n`nIN-PERSON EQUIVALENT:`nOpening Task Manager, clicking the 'Users' tab, and looking at the list of signed-in accounts." `
-    -Code "`$quserOutput = quser /server:`$Target 2>&1`nif (`$quserOutput -match 'Error') {`n    `$quserOutput = & `$psExecPath /accepteula \\`$Target -s quser 2>&1`n}"
+    -Code "quser /server:$Target"
 
 try {
     $quserOutput = quser /server:$Target 2>&1
 
-    # PsExec Fallback
+    # PsExec fallback
     if ($quserOutput -match "Error" -or $quserOutput -match "RPC") {
-        Write-Host "  > [i] RPC Blocked by Firewall. Attempting PsExec bypass..." -ForegroundColor DarkGray
+        Write-Host "  > [i] RPC blocked by firewall. Attempting PsExec bypass..." -ForegroundColor DarkGray
 
         if ($psExecPath -and (Test-Path $psExecPath)) {
             $quserOutput = & $psExecPath /accepteula \\$Target -s quser 2>&1
         } else {
-            Write-Host "  > [!] ERROR: psexec.exe missing from \Core. Cannot bypass firewall."
+            Write-Host "  > [!] Error: psexec.exe missing from \Core. Cannot bypass firewall."
         }
     }
 
@@ -139,7 +139,7 @@ try {
 
             Write-Host "  $line"
 
-            # Update History
+            # Update history database
             if ($line -match "^\s*>?([a-zA-Z0-9_\.-]+)\s+.*Active") {
                 $qUser = $matches[1]
                 if ($qUser -ne "services" -and $UpdateHelper -and (Test-Path $UpdateHelper)) {

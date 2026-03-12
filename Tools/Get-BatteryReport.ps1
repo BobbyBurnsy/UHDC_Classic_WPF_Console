@@ -13,7 +13,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -26,12 +26,12 @@ function Wait-TrainingStep {
         while (-not $SyncHash.StepAck) { Start-Sleep -Milliseconds 200 }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -48,24 +48,23 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] BATTERY HEALTH DIAGNOSTICS"
+Write-Host " [UHDC] Battery health diagnostics"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 if (-not (Test-Connection -ComputerName $Target -Count 1 -Quiet)) {
     Write-Host " [UHDC] [!] Offline. $Target is not responding to ping."
     Write-Host "========================================`n"
     return
 }
 
-# --- 2. Generate and Pull Report ---
+# Generate and pull report
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
-    # Generate Report
     Wait-TrainingStep `
-        -Desc "STEP 1: GENERATE REMOTE BATTERY REPORT`n`nWHEN TO USE THIS:`nUse this when a user complains that their laptop battery is draining too fast, not holding a charge, or shutting down unexpectedly.`n`nWHAT IT DOES:`nWe are using WinRM to execute the native Windows 'powercfg' utility on the remote machine. This generates a detailed HTML report containing the last 14 days of battery usage, cycle counts, and degradation metrics, saving it to a temporary folder.`n`nIN-PERSON EQUIVALENT:`nOpen an elevated Command Prompt on the user's PC and type 'powercfg /batteryreport /duration 14'." `
-        -Code "Invoke-Command -ComputerName $Target -ScriptBlock { cmd.exe /c `"powercfg /batteryreport /output C:\Temp\battery-report.html /duration 14`" }"
+        -Desc "STEP 1: GENERATE REMOTE BATTERY REPORT`n`nWHEN TO USE THIS:`nUse this when a user complains that their laptop battery is draining too fast, not holding a charge, or shutting down unexpectedly.`n`nWHAT IT DOES:`nWhile this script uses WinRM for speed, you can do this natively using PsExec to run the Windows 'powercfg' utility on the remote machine. This generates a detailed HTML report containing the last 14 days of battery usage, cycle counts, and degradation metrics, saving it to a temporary folder.`n`nIN-PERSON EQUIVALENT:`nOpen an elevated Command Prompt on the user's PC and type 'powercfg /batteryreport /duration 14'." `
+        -Code "psexec.exe \\$Target -s powercfg /batteryreport /output C:\Temp\battery-report.html /duration 14"
 
     Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
         $tempDir = "C:\Temp"
@@ -86,20 +85,19 @@ try {
 
     if (Test-Path $remotePath) {
 
-        # Retrieve and Cleanup
         Wait-TrainingStep `
-            -Desc "STEP 2: RETRIEVE AND DISPLAY REPORT`n`nWHEN TO USE THIS:`nThis step brings the generated report back to your workstation so you can analyze the 'Design Capacity' versus the 'Full Charge Capacity' to determine if the battery needs physical replacement.`n`nWHAT IT DOES:`nWe are copying the HTML file over the network (via the C$ administrative share) to your local Temp folder, opening it in your default web browser, and then deleting the remote copy to leave no trace.`n`nIN-PERSON EQUIVALENT:`nNavigate to the folder where the report was saved, double-click the HTML file to open it in Edge/Chrome, and review the battery health statistics." `
-            -Code "Copy-Item '\\$Target\C$\Temp\battery-report.html' -Destination '$localPath'`nStart-Process '$localPath'`nRemove-Item '\\$Target\C$\Temp\battery-report.html'"
+            -Desc "STEP 2: RETRIEVE AND DISPLAY REPORT`n`nWHEN TO USE THIS:`nThis step brings the generated report back to your workstation so you can analyze the 'Design Capacity' versus the 'Full Charge Capacity' to determine if the battery needs physical replacement.`n`nWHAT IT DOES:`nWe copy the HTML file over the network (via the C$ administrative share) to your local Temp folder, open it in your default web browser, and then delete the remote copy to leave no trace. Natively, this is done using the 'copy', 'start', and 'del' commands.`n`nIN-PERSON EQUIVALENT:`nNavigate to the folder where the report was saved, double-click the HTML file to open it in Edge/Chrome, and review the battery health statistics." `
+            -Code "copy `"\\$Target\C`$\Temp\battery-report.html`" `"%TEMP%\battery.html`"`nstart `"%TEMP%\battery.html`"`ndel `"\\$Target\C`$\Temp\battery-report.html`""
 
         Write-Host "  > [2/2] Copying report to local machine..."
         Copy-Item -Path $remotePath -Destination $localPath -Force
 
-        Write-Host "`n [UHDC SUCCESS] Opening battery report locally..."
+        Write-Host "`n [UHDC] Success: Opening battery report locally..."
         Start-Process $localPath
 
         Remove-Item -Path $remotePath -Force -ErrorAction SilentlyContinue
 
-        # --- Audit Log ---
+        # Audit log
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
@@ -108,12 +106,12 @@ try {
         }
 
     } else {
-        Write-Host "`n [UHDC] [!] ERROR: Report generation succeeded, but file was not found at $remotePath."
+        Write-Host "`n [UHDC] [!] Error: Report generation succeeded, but file was not found at $remotePath."
         Write-Host "      (Note: If $Target is a desktop PC, powercfg cannot generate a battery report.)"
     }
 
 } catch {
-    Write-Host "`n [UHDC ERROR] Failed to generate battery report."
+    Write-Host "`n [UHDC] [!] Error: Failed to generate battery report."
     Write-Host "     $($_.Exception.Message)"
 }
 

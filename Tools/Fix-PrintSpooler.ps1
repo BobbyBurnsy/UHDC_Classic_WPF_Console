@@ -14,7 +14,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -33,12 +33,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -55,10 +55,10 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] PRINT SPOOLER REMEDIATION"
+Write-Host " [UHDC] Print spooler remediation"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -72,14 +72,13 @@ try {
     return
 }
 
-# --- 2. Execute Spooler Reset ---
+# Execute spooler reset
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
-    # WinRM Spooler Reset
     Wait-TrainingStep `
-        -Desc "STEP 1: RESET PRINT SPOOLER (WINRM)`n`nWHEN TO USE THIS:`nUse this when a user complains that a document is 'stuck' in the print queue, preventing all other documents from printing, and right-clicking 'Cancel' does nothing.`n`nWHAT IT DOES:`nWe establish a WinRM session to execute three commands sequentially: 1) Stop the 'Spooler' service to release file locks. 2) Delete all corrupted .SHD and .SPL files inside 'C:\Windows\System32\spool\PRINTERS'. 3) Start the 'Spooler' service back up.`n`nIN-PERSON EQUIVALENT:`nOpen Services (services.msc), stop 'Print Spooler', navigate to the PRINTERS folder in File Explorer, delete all files, and start the service again." `
-        -Code "Invoke-Command -ComputerName `$Target -ScriptBlock {`n    Stop-Service -Name Spooler -Force`n    Start-Sleep -Seconds 2`n    Remove-Item -Path 'C:\Windows\System32\spool\PRINTERS\*' -File -Force`n    Start-Service -Name Spooler`n}"
+        -Desc "Step 1: Reset the print spooler`n`nWhen to use this:`nUse this when a user complains that a document is 'stuck' in the print queue, preventing all other documents from printing, and right-clicking 'Cancel' does nothing.`n`nWhat it does:`nWe use PsExec to run a chain of native Windows commands. First, 'net stop spooler' halts the service to release file locks. Then, 'del' wipes out the corrupted .SHD and .SPL files inside the PRINTERS folder. Finally, 'net start spooler' brings the service back online.`n`nIn-person equivalent:`nOpening an elevated Command Prompt and typing these commands manually, or using services.msc and File Explorer." `
+        -Code "psexec.exe \\$Target -s cmd /c `"net stop spooler & del /Q /F /S %systemroot%\System32\Spool\Printers\*.* & net start spooler`""
 
     Write-Host "  > [1/1] Stopping service, clearing queue, and restarting..."
 
@@ -93,9 +92,9 @@ try {
         Start-Service -Name Spooler -ErrorAction Stop
     }
 
-    Write-Host "`n [UHDC SUCCESS] Print Spooler restarted and print queue cleared!"
+    Write-Host "`n [UHDC] Success: Print spooler restarted and print queue cleared."
 
-    # --- Audit Log ---
+    # Audit log
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) {
@@ -104,16 +103,16 @@ try {
     }
 
 } catch {
-    # --- PsExec Fallback ---
-    Write-Host "  > [i] WinRM Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
+    # PsExec fallback
+    Write-Host "  > [i] WinRM blocked by firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
     if (Test-Path $psExecPath) {
 
         Wait-TrainingStep `
-            -Desc "STEP 1 (FALLBACK): PSEXEC SPOOLER RESET`n`nWHEN TO USE THIS:`nThis triggers automatically if the standard WinRM query is blocked by the target's Windows Firewall.`n`nWHAT IT DOES:`nWe use PsExec to bypass the WinRM block and execute a chained command directly on the target PC using the native 'net' and 'del' commands.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated Command Prompt on the user's PC and typing: 'net stop spooler', then 'del /Q /F /S %systemroot%\System32\Spool\Printers\*.*', then 'net start spooler'." `
-            -Code "`$cmdChain = 'cmd /c `"net stop spooler & del /Q /F /S %systemroot%\System32\Spool\Printers\*.* & net start spooler`"'`n& `$psExecPath /accepteula \\`$Target -s `$cmdChain"
+            -Desc "Step 1 (Fallback): Restart service only`n`nWhen to use this:`nSometimes the queue isn't jammed with files, but the spooler service itself has just crashed or hung.`n`nWhat it does:`nYou can skip the file deletion and just bounce the service using the native 'net' commands.`n`nIn-person equivalent:`nOpening Command Prompt and typing 'net stop spooler' followed by 'net start spooler'." `
+            -Code "psexec.exe \\$Target -s cmd /c `"net stop spooler & net start spooler`""
 
         # Execute chained command via PsExec
         $cmdChain = 'cmd /c "net stop spooler & del /Q /F /S %systemroot%\System32\Spool\Printers\*.* & net start spooler"'
@@ -127,9 +126,9 @@ try {
         }
 
         if ($success) {
-            Write-Host "`n [UHDC SUCCESS] Print Spooler restarted and print queue cleared via PsExec!"
+            Write-Host "`n [UHDC] Success: Print spooler restarted and print queue cleared via PsExec."
 
-            # --- Audit Log (Fallback) ---
+            # Audit log (Fallback)
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
                 if (Test-Path $AuditHelper) { 
@@ -140,7 +139,7 @@ try {
             Write-Host "  > [!] PsExec fallback failed. Target may be completely locked down."
         }
     } else {
-        Write-Host "  > [!] ERROR: psexec.exe missing from \Core. Cannot attempt fallback."
+        Write-Host "  > [!] Error: psexec.exe missing from \Core. Cannot attempt fallback."
     }
 }
 

@@ -14,7 +14,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -33,12 +33,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -58,7 +58,7 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] REMOTE DNS REGISTRATION: $Target"
+Write-Host " [UHDC] Remote DNS registration: $Target"
 Write-Host "========================================`n"
 
 # We do a quick ping, but we don't stop the script if it fails,
@@ -82,13 +82,13 @@ $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 if (Test-Path $psExecPath) {
     try {
         Write-Host " [UHDC]  > Connecting via PsExec..."
-        Write-Host " [UHDC]  > Flushing local DNS Cache..."
-        Write-Host " [UHDC]  > Registering new DNS Records..."
+        Write-Host " [UHDC]  > Flushing local DNS cache..."
+        Write-Host " [UHDC]  > Registering new DNS records..."
         Write-Host " [UHDC]  > Refreshing NetBIOS (nbtstat)..."
 
-        # --- 1. Execute DNS/WINS Refresh Chain ---
+        # 1. Execute DNS/WINS refresh chain
         Wait-TrainingStep `
-            -Desc "STEP 1: FLUSH AND REGISTER DNS`n`nWHEN TO USE THIS:`nUse this when a computer is turned on and connected to the network, but you cannot connect to it via hostname (e.g., Remote Desktop or File Shares fail). This usually happens when a user switches from Wi-Fi to a wired docking station, giving the laptop a new IP address, but the Domain Controller still has the old IP address cached (a 'stale' DNS record).`n`nWHAT IT DOES:`nWe are using PsExec to run a chained command as the SYSTEM account on the remote PC. It flushes the PC's local DNS cache, forces the PC to re-register its current IP address with the Domain Controller's DNS server, and refreshes its NetBIOS names.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open an elevated Command Prompt and type 'ipconfig /flushdns', press Enter, type 'ipconfig /registerdns', press Enter, and finally type 'nbtstat -RR'." `
+            -Desc "STEP 1: FLUSH AND REGISTER DNS`n`nWHEN TO USE THIS:`nUse this when a computer is turned on and connected to the network, but you cannot connect to it via hostname (e.g., Remote Desktop or File Shares fail). This usually happens when a user switches from Wi-Fi to a wired docking station, giving the laptop a new IP address, but the Domain Controller still has the old IP address cached (a 'stale' DNS record).`n`nWHAT IT DOES:`nWe use PsExec to run a chained command as the SYSTEM account on the remote PC. It flushes the PC's local DNS cache, forces the PC to re-register its current IP address with the Domain Controller's DNS server, and refreshes its NetBIOS names.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open an elevated Command Prompt and type 'ipconfig /flushdns', press Enter, type 'ipconfig /registerdns', press Enter, and finally type 'nbtstat -RR'." `
             -Code "psexec.exe \\$Target -s cmd /c `"ipconfig /flushdns & ipconfig /registerdns & nbtstat -RR`""
 
         # Chaining the commands with '&' executes them sequentially in a single PsExec session.
@@ -97,10 +97,10 @@ if (Test-Path $psExecPath) {
 
         Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s $cmdChain" -Wait -NoNewWindow
 
-        Write-Host "`n [UHDC SUCCESS] DNS/WINS refresh commands dispatched to $Target."
-        Write-Host "             (Note: It may take 5-10 minutes for the Domain Controller to update)"
+        Write-Host "`n [UHDC] Success: DNS/WINS refresh commands dispatched to $Target."
+        Write-Host "        (Note: It may take 5-10 minutes for the Domain Controller to update)"
 
-        # --- Audit Log ---
+        # Audit log
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
@@ -109,10 +109,10 @@ if (Test-Path $psExecPath) {
         }
 
     } catch {
-        Write-Host " [UHDC] [!] ERROR: Failed to execute PsExec. $($_.Exception.Message)"
+        Write-Host " [UHDC] [!] Error: Failed to execute PsExec. $($_.Exception.Message)"
     }
 } else {
-    Write-Host " [UHDC] [!] ERROR: psexec.exe not found at $psExecPath"
+    Write-Host " [UHDC] [!] Error: psexec.exe not found at $psExecPath"
     Write-Host "        Please ensure the UHDC console has downloaded it to the \Core folder."
 }
 

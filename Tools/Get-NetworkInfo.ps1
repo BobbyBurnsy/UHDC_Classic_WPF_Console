@@ -1,7 +1,8 @@
 # Get-NetworkInfo.ps1
-# Remotely queries the target for active network adapters (Status=Up).
+# Remotely queries the target for active network adapters.
 # Filters out loopback/APIPA addresses and correlates IPv4 addresses with
-# Interface Descriptions, MAC Addresses, and Link Speeds.
+# interface descriptions, MAC addresses, and link speeds.
+# Includes a PsExec fallback using 'ipconfig /all' if WinRM is blocked.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -14,7 +15,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -33,12 +34,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -58,10 +59,10 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] NETWORK INTERFACE DIAGNOSTICS"
+Write-Host " [UHDC] Network interface diagnostics"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -75,13 +76,13 @@ try {
     return
 }
 
-# --- 2. Remote Network Query ---
+# Remote network query
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
     Wait-TrainingStep `
-        -Desc "STEP 1: QUERY ACTIVE NETWORK INTERFACES`n`nWHEN TO USE THIS:`nUse this when troubleshooting network connectivity, verifying if a user is on Wi-Fi or Ethernet, checking link speeds for performance issues (e.g., 100Mbps vs 1Gbps), or retrieving a MAC address for DHCP reservations.`n`nWHAT IT DOES:`nWe are establishing a WinRM session to query the target's active network adapters and IPv4 addresses. We filter out disconnected adapters, loopback addresses (127.0.0.1), and APIPA addresses (169.254.x.x), then correlate the valid IP to its physical MAC address and negotiated link speed.`n`nIN-PERSON EQUIVALENT:`nOpen an elevated Command Prompt and type 'ipconfig /all', or press Win+R, type 'ncpa.cpl' (Network Connections), double-click the active adapter, and click 'Details...'." `
-        -Code "Invoke-Command -ComputerName $Target -ScriptBlock {`n    `$adapters = Get-NetAdapter | Where-Object Status -eq 'Up'`n    `$ips = Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -notmatch '169.254|127.0'`n    # Correlate IP to Adapter MAC/Speed`n}"
+        -Desc "Step 1: Query active network interfaces`n`nWhen to use this:`nUse this when troubleshooting network connectivity, verifying if a user is on Wi-Fi or Ethernet, checking link speeds for performance issues, or retrieving a MAC address for DHCP reservations.`n`nWhat it does:`nWe use PsExec to run the native Windows 'ipconfig /all' command on the remote machine. This dumps all IP, DNS, and MAC address configurations for every adapter on the system.`n`nIn-person equivalent:`nOpen Command Prompt and type 'ipconfig /all', or press Win+R, type 'ncpa.cpl' (Network Connections), double-click the active adapter, and click 'Details...'." `
+        -Code "psexec.exe \\$Target -s ipconfig /all"
 
     $netData = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
         $adapters = Get-NetAdapter | Where-Object Status -eq 'Up'
@@ -103,7 +104,7 @@ try {
     }
 
     if ($netData) {
-        Write-Host "`n --- Active Interfaces ---"
+        Write-Host "`n --- Active interfaces ---"
         foreach ($nic in $netData) {
             Write-Host "  > Adapter: $($nic.Adapter)"
             Write-Host "    Desc:    $($nic.Desc)"
@@ -112,11 +113,11 @@ try {
             Write-Host "    Speed:   $($nic.Speed)`n"
         }
 
-        # --- Audit Log ---
+        # Audit log
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
-                & $AuditHelper -Target $Target -Action "Queried Network Info (IP/MAC)" -SharedRoot $SharedRoot
+                & $AuditHelper -Target $Target -Action "Queried Network Info (WinRM)" -SharedRoot $SharedRoot
             }
         }
     } else {
@@ -124,8 +125,46 @@ try {
     }
 
 } catch {
-    Write-Host "`n [UHDC ERROR] Could not query network info."
-    Write-Host "     $($_.Exception.Message)"
+    # PsExec fallback
+    Write-Host "  > [i] WinRM blocked by firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
+
+    $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
+
+    if (Test-Path $psExecPath) {
+
+        Wait-TrainingStep `
+            -Desc "Step 1 (Fallback): Filter ipconfig output`n`nWhen to use this:`nRunning 'ipconfig /all' returns a massive wall of text, including disconnected Bluetooth adapters and virtual switches. We only want the important stuff.`n`nWhat it does:`nWe pipe the output of 'ipconfig /all' into the native Windows 'findstr' command, searching specifically for lines containing 'IPv4', 'Description', or 'Physical Address' (MAC).`n`nIn-person equivalent:`nOpening Command Prompt and typing 'ipconfig /all | findstr /i `"IPv4 Description Physical`"'." `
+            -Code "psexec.exe \\$Target -s cmd /c `"ipconfig /all | findstr /i 'IPv4 Description Physical'`""
+
+        $cmdChain = 'cmd /c "ipconfig /all | findstr /i \"IPv4 Description Physical\""'
+        $ipOutput = & $psExecPath /accepteula \\$Target -s $cmdChain 2>&1
+
+        Write-Host "`n --- Active interfaces (Fallback) ---"
+
+        $foundData = $false
+        foreach ($line in $ipOutput) {
+            if ($line -match "PsExec v" -or $line -match "Sysinternals" -or $line -match "Copyright" -or $line -match "starting on" -or $line -match "exited with error code") { continue }
+
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                Write-Host "  $line"
+                $foundData = $true
+            }
+        }
+
+        if (-not $foundData) {
+            Write-Host "  > [!] PsExec fallback failed. Target may be completely locked down."
+        } else {
+            # Audit log (Fallback)
+            if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
+                $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
+                if (Test-Path $AuditHelper) { 
+                    & $AuditHelper -Target $Target -Action "Queried Network Info (PsExec Fallback)" -SharedRoot $SharedRoot
+                }
+            }
+        }
+    } else {
+        Write-Host "  > [!] Error: psexec.exe missing from \Core. Cannot attempt fallback."
+    }
 }
 
 Write-Host "========================================`n"

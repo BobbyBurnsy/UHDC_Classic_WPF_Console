@@ -14,7 +14,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -33,12 +33,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -55,10 +55,10 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] RESTART SCCM AGENT: $Target"
+Write-Host " [UHDC] Restart SCCM agent: $Target"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -72,13 +72,13 @@ try {
     return
 }
 
-# --- 2. Execute Remote Restart ---
+# Execute remote restart
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
     Wait-TrainingStep `
-        -Desc "STEP 1: RESTART THE SMS AGENT HOST`n`nWHEN TO USE THIS:`nUse this when a user complains that an application in Software Center is stuck on 'Downloading' or 'Waiting to install', or when a newly deployed application is not showing up in their Software Center at all.`n`nWHAT IT DOES:`nWe are establishing a remote WinRM session to restart the 'CcmExec' (SMS Agent Host) service. We explicitly stop the service, wait 4 seconds to ensure it fully releases its lock on the local SCCM log files (like CAS.log or AppEnforce.log), and then start it again. This forces the agent to wake up and request a fresh machine policy from the management point.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open Services (services.msc), locate 'SMS Agent Host', right-click it, and select 'Restart'. Alternatively, you would open the Configuration Manager applet in the Control Panel, go to the Actions tab, select 'Machine Policy Retrieval & Evaluation Cycle', and click 'Run Now'." `
-        -Code "Invoke-Command -ComputerName `$Target -ScriptBlock {`n    Stop-Service -Name CcmExec -Force`n    Start-Sleep -Seconds 4`n    Start-Service -Name CcmExec`n}"
+        -Desc "STEP 1: RESTART THE SMS AGENT HOST`n`nWHEN TO USE THIS:`nUse this when a user complains that an application in Software Center is stuck on 'Downloading' or 'Waiting to install', or when a newly deployed application is not showing up in their Software Center at all.`n`nWHAT IT DOES:`nWe are restarting the 'CcmExec' (SMS Agent Host) service. We explicitly stop the service, wait 4 seconds to ensure it fully releases its lock on the local SCCM log files (like CAS.log or AppEnforce.log), and then start it again. While this console uses WinRM for speed when available, the command below shows how to do this natively using PsExec and standard Windows commands.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open Services (services.msc), locate 'SMS Agent Host', right-click it, and select 'Restart'." `
+        -Code "psexec.exe \\$Target -s cmd /c `"net stop CcmExec & timeout /t 4 /nobreak > NUL & net start CcmExec`""
 
     Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
         Write-Host "  > [UHDC] Stopping CcmExec service..."
@@ -91,10 +91,10 @@ try {
         Start-Service -Name CcmExec -ErrorAction Stop
     }
 
-    Write-Host "`n [UHDC SUCCESS] SCCM Agent restarted successfully!"
+    Write-Host "`n [UHDC] Success: SCCM Agent restarted successfully."
     Write-Host " [UHDC] [i] Note: It may take 2-3 minutes for the PC to check in with the Site Server."
 
-    # --- Audit Log ---
+    # Audit log
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) {
@@ -103,25 +103,25 @@ try {
     }
 
 } catch {
-    # --- PsExec Fallback ---
-    Write-Host "  > [i] WinRM Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
+    # PsExec fallback
+    Write-Host "  > [i] WinRM blocked by firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
     if (Test-Path $psExecPath) {
 
         Wait-TrainingStep `
-            -Desc "STEP 1 (FALLBACK): PSEXEC SCCM RESTART`n`nWHEN TO USE THIS:`nThis triggers automatically if the standard WinRM query is blocked by the target's Windows Firewall.`n`nWHAT IT DOES:`nWe use PsExec to bypass the WinRM block and execute a chained command directly on the target PC. It uses 'net stop' to kill the service, 'timeout' to wait 4 seconds, and 'net start' to bring it back online.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated Command Prompt and typing the equivalent native commands manually." `
-            -Code "`$cmdChain = 'cmd /c `"net stop CcmExec & timeout /t 4 /nobreak > NUL & net start CcmExec`"'`n& `$psExecPath /accepteula \\`$Target -s `$cmdChain"
+            -Desc "STEP 1 (FALLBACK): PSEXEC SCCM RESTART`n`nWHEN TO USE THIS:`nThis triggers automatically if the standard WinRM connection is blocked by the target's Windows Firewall.`n`nWHAT IT DOES:`nSince WinRM failed, we are falling back to the native PsExec method. We use 'net stop' to kill the service, 'timeout' to wait 4 seconds, and 'net start' to bring it back online.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated Command Prompt and typing the equivalent native commands manually." `
+            -Code "psexec.exe \\$Target -s cmd /c `"net stop CcmExec & timeout /t 4 /nobreak > NUL & net start CcmExec`""
 
         $cmdChain = 'cmd /c "net stop CcmExec & timeout /t 4 /nobreak > NUL & net start CcmExec"'
 
         Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s $cmdChain" -Wait -NoNewWindow
 
-        Write-Host "`n [UHDC SUCCESS] SCCM Agent restarted via PsExec!"
+        Write-Host "`n [UHDC] Success: SCCM Agent restarted via PsExec."
         Write-Host " [UHDC] [i] Note: It may take 2-3 minutes for the PC to check in with the Site Server."
 
-        # --- Audit Log (Fallback) ---
+        # Audit log (Fallback)
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) { 
@@ -129,7 +129,7 @@ try {
             }
         }
     } else {
-        Write-Host "  > [!] ERROR: psexec.exe missing from \Core. Cannot attempt fallback."
+        Write-Host "  > [!] Error: psexec.exe missing from \Core. Cannot attempt fallback."
     }
 }
 

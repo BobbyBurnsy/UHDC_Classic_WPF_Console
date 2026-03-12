@@ -13,7 +13,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -32,12 +32,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -54,10 +54,10 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] LOCAL ADMINISTRATOR AUDIT"
+Write-Host " [UHDC] Local administrator audit"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -71,19 +71,19 @@ try {
     return
 }
 
-# --- 2. Query Local Administrators ---
+# Query local administrators
 try {
     Write-Host " [UHDC] [i] Connecting to $Target via WinRM..."
 
     Wait-TrainingStep `
-        -Desc "STEP 1: QUERY LOCAL ADMINISTRATORS GROUP`n`nWHEN TO USE THIS:`nUse this when auditing a machine for unauthorized privilege escalation, verifying that LAPS (Local Administrator Password Solution) is functioning, or confirming a specific user/group has the necessary rights to install software.`n`nWHAT IT DOES:`nWe are establishing a WinRM session to query the local SAM (Security Account Manager) database of the target machine. We specifically target the built-in 'Administrators' group and return its members, identifying whether they are local accounts or Active Directory objects.`n`nIN-PERSON EQUIVALENT:`nRight-click the Start Menu, select 'Computer Management' (compmgmt.msc), expand 'Local Users and Groups', click 'Groups', and double-click the 'Administrators' group to view its members." `
-        -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-LocalGroupMember -Group 'Administrators' | Select-Object Name, PrincipalSource, ObjectClass }"
+        -Desc "STEP 1: QUERY LOCAL ADMINISTRATORS GROUP`n`nWHEN TO USE THIS:`nUse this when auditing a machine for unauthorized privilege escalation, verifying that LAPS (Local Administrator Password Solution) is functioning, or confirming a specific user/group has the necessary rights to install software.`n`nWHAT IT DOES:`nWe use PsExec to run the native Windows 'net localgroup' command on the remote machine. This queries the local SAM (Security Account Manager) database and returns a list of all accounts and groups that have local admin rights.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt on the user's PC and typing 'net localgroup administrators', or opening Computer Management (compmgmt.msc) and checking the Administrators group." `
+        -Code "psexec.exe \\$Target -s net localgroup administrators"
 
     $admins = Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock {
         Get-LocalGroupMember -Group "Administrators" | Select-Object Name, PrincipalSource, ObjectClass
     }
 
-    Write-Host "`n --- Administrators Group Members ---"
+    Write-Host "`n --- Administrators group members ---"
 
     if ($admins) {
         foreach ($admin in $admins) {
@@ -96,7 +96,7 @@ try {
             Write-Host "    Source: $source`n"
         }
 
-        # --- Audit Log ---
+        # Audit log
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
@@ -109,20 +109,20 @@ try {
     }
 
 } catch {
-    # --- PsExec Fallback ---
-    Write-Host "  > [i] WinRM Blocked by Firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
+    # PsExec fallback
+    Write-Host "  > [i] WinRM blocked by firewall. Attempting PsExec fallback..." -ForegroundColor DarkGray
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
     if (Test-Path $psExecPath) {
 
         Wait-TrainingStep `
-            -Desc "STEP 1 (FALLBACK): PSEXEC NET LOCALGROUP`n`nWHEN TO USE THIS:`nThis triggers automatically if the standard WinRM query is blocked by the target's Windows Firewall.`n`nWHAT IT DOES:`nWe use PsExec to bypass the WinRM block and execute the native 'net localgroup administrators' command directly on the target PC. We then parse the text output to extract the list of users.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt on the user's PC and typing 'net localgroup administrators'." `
-            -Code "`$output = & `$psExecPath /accepteula \\`$Target -s net localgroup administrators"
+            -Desc "STEP 1 (FALLBACK): CHECK SPECIFIC USER RIGHTS`n`nWHEN TO USE THIS:`nIf you only care about one specific local user (like the built-in Administrator account), dumping the whole admin group might be too noisy.`n`nWHAT IT DOES:`nYou can use the 'net user' command to query a specific local account and see its group memberships directly.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt and typing 'net user Administrator'." `
+            -Code "psexec.exe \\$Target -s net user Administrator"
 
         $netOutput = & $psExecPath /accepteula \\$Target -s net localgroup administrators 2>&1
 
-        Write-Host "`n --- Administrators Group Members (Fallback) ---"
+        Write-Host "`n --- Administrators group members (Fallback) ---"
 
         $capture = $false
         $foundMembers = $false
@@ -149,7 +149,7 @@ try {
         if (-not $foundMembers) {
             Write-Host "  > [!] PsExec fallback failed. Target may be completely locked down."
         } else {
-            # --- Audit Log (Fallback) ---
+            # Audit log (Fallback)
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
                 if (Test-Path $AuditHelper) { 
@@ -158,7 +158,7 @@ try {
             }
         }
     } else {
-        Write-Host "  > [!] ERROR: psexec.exe missing from \Core. Cannot attempt fallback."
+        Write-Host "  > [!] Error: psexec.exe missing from \Core. Cannot attempt fallback."
     }
 }
 

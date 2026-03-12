@@ -17,7 +17,7 @@ param(
     [string]$ThemeB64
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -35,12 +35,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -54,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     } catch { }
 }
 
-# --- Theme Engine ---
+# Theme engine
 $ActiveColors = @{
     BG_Main = "#1E1E1E"; BG_Sec  = "#111111"; BG_Con  = "#0C0C0C"
     BG_Btn  = "#2D2D30"; Acc_Pri = "#00A2ED"; Acc_Sec = "#00FF00"
@@ -77,7 +77,7 @@ if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
 
 Add-Type -AssemblyName PresentationFramework
 
-# --- Custom Themed Input Box ---
+# Custom themed input box
 function Show-DarkInputBox {
     param([string]$Title, [string]$Prompt, [string]$DefaultText = "")
 
@@ -122,18 +122,18 @@ function Show-DarkInputBox {
     return $null
 }
 
-# --- 1. Target Validation ---
+# Target validation
 if ([string]::IsNullOrWhiteSpace($Target)) {
-    $Target = Show-DarkInputBox -Title "Target Required" -Prompt "Enter Target PC to Restart/Logoff:"
+    $Target = Show-DarkInputBox -Title "Target Required" -Prompt "Enter target PC to restart/logoff:"
 
     if ([string]::IsNullOrWhiteSpace($Target)) {
-        Write-Host " [UHDC] [!] Action cancelled (No target provided)." -ForegroundColor Yellow
+        Write-Host " [UHDC] [i] Action cancelled (No target provided)." -ForegroundColor Yellow
         return
     }
 }
 
 Write-Host "========================================================"
-Write-Host " [UHDC] POWER CONTROLS: $Target"
+Write-Host " [UHDC] Power controls: $Target"
 Write-Host "========================================================"
 
 $pingSender = New-Object System.Net.NetworkInformation.Ping
@@ -150,11 +150,11 @@ try {
 $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
 if (-not (Test-Path $psExecPath)) {
-    Write-Host " [UHDC] [!] ERROR: psexec.exe not found at $psExecPath"
+    Write-Host " [UHDC] [!] Error: psexec.exe not found at $psExecPath"
     return
 }
 
-# --- 2. Graphical Menu Options ---
+# Graphical menu options
 $MenuOptions = @(
     [PSCustomObject]@{ Action = "1. Standard Restart"; Command = "Restart"; Description = "Reboots in 60 seconds. Prompts user to save work." }
     [PSCustomObject]@{ Action = "2. Force Restart"; Command = "ForceRestart"; Description = "Immediate reboot. Unsaved work WILL be lost." }
@@ -163,7 +163,7 @@ $MenuOptions = @(
     [PSCustomObject]@{ Action = "5. Abort Restart"; Command = "Abort"; Description = "Cancels a pending shutdown/restart timer." }
 )
 
-Write-Host " [UHDC] >>> Opening Graphical Power Menu..." -ForegroundColor Cyan
+Write-Host " [UHDC] Opening graphical power menu..." -ForegroundColor Cyan
 
 [string]$MenuXAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -224,42 +224,42 @@ if ($MenuWin.ShowDialog() -ne $true -or -not $Selection) {
     return
 }
 
-# --- 3. Execute Selected Action ---
+# Execute selected action
 try {
     switch ($Selection.Command) {
         "Restart" {
-            Wait-TrainingStep -Desc "STEP 1: STANDARD RESTART" -Code "psexec.exe \\$Target -s shutdown /r /t 60"
-            Write-Host " [UHDC] [EXEC] Initiating standard restart on $Target..." -ForegroundColor Cyan
+            Wait-TrainingStep -Desc "STEP 1: STANDARD RESTART`n`nWHEN TO USE THIS:`nUse this when a PC needs a reboot, but you want to give the user a 60-second warning to save their work.`n`nWHAT IT DOES:`nWe use PsExec to run the native 'shutdown.exe' command. The '/r' switch tells it to restart, and the '/t 60' switch sets a 60-second countdown timer.`n`nIN-PERSON EQUIVALENT:`nClicking Start > Power > Restart." -Code "psexec.exe \\$Target -s shutdown /r /t 60"
+            Write-Host " [UHDC] [i] Initiating standard restart on $Target..." -ForegroundColor Cyan
             Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /r /t 60" -Wait -NoNewWindow
-            Write-Host " [UHDC SUCCESS] Restart command sent." -ForegroundColor Green
+            Write-Host " [UHDC] Success: Restart command sent." -ForegroundColor Green
         }
         "ForceRestart" {
-            Wait-TrainingStep -Desc "STEP 1: FORCE RESTART" -Code "psexec.exe \\$Target -s shutdown /r /f /t 0"
-            Write-Host " [UHDC] [EXEC] Initiating FORCE restart on $Target..." -ForegroundColor Red
+            Wait-TrainingStep -Desc "STEP 1: FORCE RESTART`n`nWHEN TO USE THIS:`nUse this when a PC is completely frozen, or a user is not present and you need the machine to reboot immediately.`n`nWHAT IT DOES:`nWe add the '/f' (force) switch to the shutdown command, and set the timer to '/t 0'. This instantly kills all running applications without prompting the user to save.`n`nIN-PERSON EQUIVALENT:`nHolding down the physical power button on the computer." -Code "psexec.exe \\$Target -s shutdown /r /f /t 0"
+            Write-Host " [UHDC] [i] Initiating FORCE restart on $Target..." -ForegroundColor Red
             Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /r /f /t 0" -Wait -NoNewWindow
-            Write-Host " [UHDC SUCCESS] Force restart command sent." -ForegroundColor Green
+            Write-Host " [UHDC] Success: Force restart command sent." -ForegroundColor Green
         }
         "Logoff" {
-            Wait-TrainingStep -Desc "STEP 1: FORCE LOGOFF" -Code "psexec.exe \\$Target -s rwinsta console"
-            Write-Host " [UHDC] [EXEC] Forcing user logoff on $Target..." -ForegroundColor Yellow
+            Wait-TrainingStep -Desc "STEP 1: FORCE LOGOFF`n`nWHEN TO USE THIS:`nUse this when a user locked their screen and walked away, and another user needs to log into that specific PC.`n`nWHAT IT DOES:`nWe use PsExec to run the native 'rwinsta' (Reset Windows Station) command against the 'console' session. This forcefully terminates the active user's session and returns the PC to the Ctrl+Alt+Delete screen.`n`nIN-PERSON EQUIVALENT:`nOpening Task Manager, going to the Users tab, right-clicking the user, and selecting 'Sign off'." -Code "psexec.exe \\$Target -s rwinsta console"
+            Write-Host " [UHDC] [i] Forcing user logoff on $Target..." -ForegroundColor Yellow
             Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s rwinsta console" -Wait -NoNewWindow
-            Write-Host " [UHDC SUCCESS] Logoff command sent." -ForegroundColor Green
+            Write-Host " [UHDC] Success: Logoff command sent." -ForegroundColor Green
         }
         "Shutdown" {
-            Wait-TrainingStep -Desc "STEP 1: REMOTE SHUTDOWN" -Code "psexec.exe \\$Target -s shutdown /s /f /t 0"
-            Write-Host " [UHDC] [EXEC] Initiating remote shutdown on $Target..." -ForegroundColor Cyan
+            Wait-TrainingStep -Desc "STEP 1: REMOTE SHUTDOWN`n`nWHEN TO USE THIS:`nUse this when a machine needs to be powered off completely (e.g., before a scheduled power outage in a building).`n`nWHAT IT DOES:`nWe use the '/s' switch instead of '/r' to tell the machine to shut down and stay off.`n`nIN-PERSON EQUIVALENT:`nClicking Start > Power > Shut down." -Code "psexec.exe \\$Target -s shutdown /s /f /t 0"
+            Write-Host " [UHDC] [i] Initiating remote shutdown on $Target..." -ForegroundColor Cyan
             Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /s /f /t 0" -Wait -NoNewWindow
-            Write-Host " [UHDC SUCCESS] Shutdown command sent." -ForegroundColor Green
+            Write-Host " [UHDC] Success: Shutdown command sent." -ForegroundColor Green
         }
         "Abort" {
-            Wait-TrainingStep -Desc "STEP 1: ABORT PENDING RESTART" -Code "psexec.exe \\$Target -s shutdown /a"
-            Write-Host " [UHDC] [EXEC] Attempting to abort pending restart on $Target..." -ForegroundColor Cyan
+            Wait-TrainingStep -Desc "STEP 1: ABORT PENDING RESTART`n`nWHEN TO USE THIS:`nUse this if you accidentally sent a restart command with a timer, or if a Windows Update is about to force a reboot and the user begs for more time.`n`nWHAT IT DOES:`nWe use the '/a' (abort) switch to cancel any active shutdown countdowns on the target machine.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt quickly and typing 'shutdown /a'." -Code "psexec.exe \\$Target -s shutdown /a"
+            Write-Host " [UHDC] [i] Attempting to abort pending restart on $Target..." -ForegroundColor Cyan
             Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /a" -Wait -NoNewWindow
-            Write-Host " [UHDC SUCCESS] Abort command sent." -ForegroundColor Green
+            Write-Host " [UHDC] Success: Abort command sent." -ForegroundColor Green
         }
     }
 
-    # --- Audit Log ---
+    # Audit log
     if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
         $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
         if (Test-Path $AuditHelper) {
@@ -267,7 +267,7 @@ try {
         }
     }
 } catch {
-    Write-Host " [UHDC ERROR] Execution failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host " [UHDC] [!] Error: Execution failed: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 Write-Host "========================================================`n"

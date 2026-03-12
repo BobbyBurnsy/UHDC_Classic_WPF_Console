@@ -2,7 +2,7 @@
 # A dedicated helper script for Microsoft Intune management.
 # Takes the target user's email address or the computer's hostname and
 # constructs the direct URL to open the Microsoft Endpoint Manager portal.
-# Features Cross-Agency Domain Filtering to prevent unauthorized access.
+# Features cross-agency domain filtering to prevent unauthorized access.
 
 param(
     [Parameter(Mandatory=$false)]
@@ -21,7 +21,7 @@ param(
     [string]$ThemeB64
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -39,12 +39,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration & Domain Filtering ---
+# Load configuration and domain filtering
 $OrgName = "IT"
 try {
     $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -64,7 +64,7 @@ if (-not $TechUPN) {
 }
 $TechDomain = if ($TechUPN -match "@(.*)$") { $matches[1] } else { "" }
 
-# --- Theme Engine Integration ---
+# Theme engine integration
 $ActiveColors = @{
     BG_Main = "#1E1E1E"; BG_Sec  = "#111111"; BG_Con  = "#0C0C0C"
     BG_Btn  = "#2D2D30"; Acc_Pri = "#00A2ED"; Acc_Sec = "#00FF00"
@@ -85,7 +85,7 @@ if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
     } catch {}
 }
 
-# --- Graph API Authentication ---
+# Graph API authentication
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $scopes = @(
@@ -108,7 +108,7 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
 
 Add-Type -AssemblyName PresentationFramework
 
-# --- UI Definition (XAML) ---
+# UI definition (XAML)
 [string]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -320,10 +320,10 @@ $BtnAddPhone  = $Form.FindName("BtnAddPhone")
 $ResolvedUser = $null
 $GlobalDevices = @()
 
-# --- Initialization ---
+# Initialization
 $Form.Add_Loaded({
     if ([string]::IsNullOrWhiteSpace($TargetUser) -and [string]::IsNullOrWhiteSpace($TargetComputer)) {
-        $HeaderTitle.Text = "Error: No User or Computer provided from GUI."
+        $HeaderTitle.Text = "Error: No user or computer provided from GUI."
         return
     }
 
@@ -378,11 +378,11 @@ $Form.Add_Loaded({
                 $DeviceList.Items.Add("$status [$($dev.OperatingSystem)] $($dev.DeviceName) - $($dev.SerialNumber)") | Out-Null
             }
         } else {
-            $DeviceList.Items.Add("No managed devices found for this User or PC.") | Out-Null
+            $DeviceList.Items.Add("No managed devices found for this user or PC.") | Out-Null
             $DeviceList.IsEnabled = $false
         }
     } catch {
-        $HeaderTitle.Text = "API Communication Error."
+        $HeaderTitle.Text = "API communication error."
     }
 })
 
@@ -418,7 +418,10 @@ $DeviceList.Add_SelectionChanged({
 
 $BtnBitLocker.Add_Click({
     $dev = $GlobalDevices[$DeviceList.SelectedIndex]
-    Wait-TrainingStep -Desc "STEP 2: RETRIEVE BITLOCKER KEY" -Code "Get-MgInformationProtectionBitlockerRecoveryKey -Filter `"deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+    Wait-TrainingStep `
+        -Desc "STEP 2: RETRIEVE BITLOCKER KEY`n`nWHEN TO USE THIS:`nUse this when a user reboots their laptop and is prompted with a blue BitLocker recovery screen.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API (Entra ID) for the specific device ID to retrieve its escrowed BitLocker recovery key.`n`nIN-PERSON EQUIVALENT:`nLogging into the Azure Portal, searching for the device, and clicking 'Recovery Keys'." `
+        -Code "Get-MgInformationProtectionBitlockerRecoveryKey -Filter `"deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+
     $OutputText.Text = "UHDC: Querying Entra ID for keys..."
     [System.Windows.Forms.Application]::DoEvents()
     try {
@@ -430,7 +433,10 @@ $BtnBitLocker.Add_Click({
 
 $BtnLAPS.Add_Click({
     $dev = $GlobalDevices[$DeviceList.SelectedIndex]
-    Wait-TrainingStep -Desc "STEP 3: RETRIEVE CLOUD LAPS" -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+    Wait-TrainingStep `
+        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
     try {
@@ -443,8 +449,11 @@ $BtnLAPS.Add_Click({
 
 $BtnUnlock.Add_Click({
     $dev = $GlobalDevices[$DeviceList.SelectedIndex]
-    Wait-TrainingStep -Desc "STEP 4: REMOVE MOBILE PASSCODE" -Code "Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId `$dev.Id"
-    if ([System.Windows.MessageBox]::Show("Remove Passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
+    Wait-TrainingStep `
+        -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
+        -Code "Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId `$dev.Id"
+
+    if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
         Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId $dev.Id
         $OutputText.Text = "UHDC: Mobile unlock command dispatched."
     }
@@ -452,14 +461,17 @@ $BtnUnlock.Add_Click({
 
 $BtnWipe.Add_Click({
     $dev = $GlobalDevices[$DeviceList.SelectedIndex]
-    Wait-TrainingStep -Desc "STEP 5: REMOTE WIPE" -Code "Invoke-MgWipeDeviceManagementManagedDevice -ManagedDeviceId `$dev.Id"
+    Wait-TrainingStep `
+        -Desc "STEP 5: REMOTE WIPE`n`nWHEN TO USE THIS:`nUse this when a device is reported lost or stolen, or when an employee leaves and the device needs to be factory reset for the next user.`n`nWHAT IT DOES:`nWe send a destructive MDM command to the device instructing it to immediately factory reset and wipe all data.`n`nIN-PERSON EQUIVALENT:`nBooting into the recovery partition and selecting 'Wipe data/factory reset'." `
+        -Code "Invoke-MgWipeDeviceManagementManagedDevice -ManagedDeviceId `$dev.Id"
+
     $msg = "WARNING: You are about to issue a REMOTE FACTORY RESET for $($dev.DeviceName).`n`nThis will permanently erase all data on the device. Are you absolutely sure?"
-    if ([System.Windows.MessageBox]::Show($msg, "UHDC DANGER: WIPE DEVICE", "YesNo", "Warning") -eq "Yes") {
-        $OutputText.Text = "UHDC: Sending Wipe command..."
+    if ([System.Windows.MessageBox]::Show($msg, "UHDC Danger: Wipe Device", "YesNo", "Warning") -eq "Yes") {
+        $OutputText.Text = "UHDC: Sending wipe command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
             Invoke-MgWipeDeviceManagementManagedDevice -ManagedDeviceId $dev.Id -ErrorAction Stop
-            $OutputText.Text = "[UHDC SUCCESS] Wipe command dispatched to $($dev.DeviceName)."
+            $OutputText.Text = "[UHDC] Success: Wipe command dispatched to $($dev.DeviceName)."
         } catch {
             $OutputText.Text = "Wipe failed: $($_.Exception.Message)"
         }
@@ -468,10 +480,13 @@ $BtnWipe.Add_Click({
 
 $BtnMFA.Add_Click({
     if (-not $ResolvedUser) {
-        $OutputText.Text = "MFA requires a successfully linked User Account."
+        $OutputText.Text = "MFA requires a successfully linked user account."
         return
     }
-    Wait-TrainingStep -Desc "STEP 6: VIEW MFA METHODS" -Code "Get-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id"
+    Wait-TrainingStep `
+        -Desc "STEP 6: VIEW MFA METHODS`n`nWHEN TO USE THIS:`nUse this when a user claims they aren't receiving their text messages or calls for multi-factor authentication.`n`nWHAT IT DOES:`nWe query Entra ID to list all phone numbers currently registered to the user's account for authentication.`n`nIN-PERSON EQUIVALENT:`nLogging into the Entra ID portal, finding the user, and clicking 'Authentication methods'." `
+        -Code "Get-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id"
+
     $OutputText.Text = "UHDC: Fetching registered MFA phones..."
     [System.Windows.Forms.Application]::DoEvents()
     try {
@@ -486,10 +501,13 @@ $BtnMFA.Add_Click({
 
 $BtnClearMFA.Add_Click({
     if (-not $ResolvedUser) {
-        $OutputText.Text = "MFA requires a successfully linked User Account."
+        $OutputText.Text = "MFA requires a successfully linked user account."
         return
     }
-    Wait-TrainingStep -Desc "STEP 7: CLEAR MFA METHODS" -Code "`$methods = Get-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id`nforeach (`$m in `$methods) { Remove-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id -PhoneAuthenticationMethodId `$m.Id }"
+    Wait-TrainingStep `
+        -Desc "STEP 7: CLEAR MFA METHODS`n`nWHEN TO USE THIS:`nUse this when a user gets a new phone number and is locked out of their account because the MFA prompts are going to their old phone.`n`nWHAT IT DOES:`nWe iterate through and delete all registered phone methods for the user. The next time they log in, Microsoft will force them to register a new method.`n`nIN-PERSON EQUIVALENT:`nClicking 'Require re-register MFA' in the Entra ID portal." `
+        -Code "`$methods = Get-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id`nforeach (`$m in `$methods) { Remove-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id -PhoneAuthenticationMethodId `$m.Id }"
+
     if ([System.Windows.MessageBox]::Show("Are you sure you want to DELETE all registered MFA phone numbers for $($ResolvedUser.DisplayName)? They will be forced to re-register on next login.", "Clear MFA", "YesNo", "Warning") -eq "Yes") {
         $OutputText.Text = "UHDC: Clearing MFA methods..."
         [System.Windows.Forms.Application]::DoEvents()
@@ -500,24 +518,27 @@ $BtnClearMFA.Add_Click({
                 Remove-MgUserAuthenticationPhoneMethod -UserId $ResolvedUser.Id -PhoneAuthenticationMethodId $m.Id -ErrorAction Stop
                 $cleared++
             }
-            $OutputText.Text = "[UHDC SUCCESS] Cleared $cleared MFA methods. User must re-register."
+            $OutputText.Text = "[UHDC] Success: Cleared $cleared MFA methods. User must re-register."
         } catch { $OutputText.Text = "Failed to clear MFA: $($_.Exception.Message)" }
     }
 })
 
 $BtnAddPhone.Add_Click({
     if (-not $ResolvedUser) {
-        $OutputText.Text = "MFA requires a successfully linked User Account."
+        $OutputText.Text = "MFA requires a successfully linked user account."
         return
     }
     $newPhone = $InputPhone.Text.Trim()
     if ($newPhone -match "^\+1") {
-        Wait-TrainingStep -Desc "STEP 8: ADD SMS MFA" -Code "New-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id -PhoneType `"mobile`" -PhoneNumber `$newPhone"
+        Wait-TrainingStep `
+            -Desc "STEP 8: ADD SMS MFA`n`nWHEN TO USE THIS:`nUse this to manually add a new phone number to a user's account so they can receive SMS codes.`n`nWHAT IT DOES:`nWe use the Graph API to inject a new 'mobile' phone authentication method directly into the user's Entra ID profile.`n`nIN-PERSON EQUIVALENT:`nHaving the user log into mysignins.microsoft.com and manually adding a phone number." `
+            -Code "New-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id -PhoneType `"mobile`" -PhoneNumber `$newPhone"
+
         $OutputText.Text = "UHDC: Adding $newPhone to account..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
             New-MgUserAuthenticationPhoneMethod -UserId $ResolvedUser.Id -PhoneType "mobile" -PhoneNumber $newPhone -ErrorAction Stop
-            $OutputText.Text = "[UHDC SUCCESS] $newPhone added as primary SMS MFA."
+            $OutputText.Text = "[UHDC] Success: $newPhone added as primary SMS MFA."
             $InputPhone.Text = ""
         } catch { $OutputText.Text = "Error: $($_.Exception.Message)" }
     } else {
@@ -533,7 +554,7 @@ $BtnSync.Add_Click({
 
 $BtnReboot.Add_Click({
     $dev = $GlobalDevices[$DeviceList.SelectedIndex]
-    if ([System.Windows.MessageBox]::Show("Send Reboot command to $($dev.DeviceName)?", "UHDC Confirm", "YesNo") -eq "Yes") {
+    if ([System.Windows.MessageBox]::Show("Send reboot command to $($dev.DeviceName)?", "UHDC Confirm", "YesNo") -eq "Yes") {
         Invoke-MgRebootDeviceManagementManagedDevice -ManagedDeviceId $dev.Id
         $OutputText.Text = "UHDC: Reboot command dispatched."
     }

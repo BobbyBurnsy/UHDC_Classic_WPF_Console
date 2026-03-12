@@ -1,13 +1,13 @@
 # UHDC.ps1 - Unified Help Desk Console (Master Script)
 # Place this script in the ROOT folder (e.g., \\Server\Share\UHDC\)
 
-# --- Auto-Elevate to Administrator ---
+# Auto-elevate to Administrator
 if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
     Exit
 }
 
-# --- Environment Setup & Configuration ---
+# Environment setup and configuration
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName Microsoft.VisualBasic
 Add-Type -AssemblyName System.Windows.Forms
@@ -22,21 +22,22 @@ if ($MyInvocation.MyCommand.Path) {
 
 $ConfigFile = Join-Path -Path $AppDir -ChildPath "config.json"
 
-# First-Run Setup
+# First-run setup (using SIDs)
 if (-not (Test-Path $ConfigFile)) {
+    $currentUserSID = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
     $Template = [ordered]@{
         OrganizationName  = "Acme Corp"
         SharedNetworkRoot = "\\YOUR-SERVER\YourShare\UHDC"
-        MasterAdmins      = @("YourAdmin1", "YourAdmin2")
-        Trainees          = @("NewHireUser1", "NewHireUser2")
+        MasterAdmins      = @($currentUserSID, "S-1-5-21-0000000000-0000000000-0000000000-1002")
+        Trainees          = @("S-1-5-21-0000000000-0000000000-0000000000-1003")
     }
     $Template | ConvertTo-Json -Depth 3 | Out-File $ConfigFile -Force
 
-    [System.Windows.MessageBox]::Show("First run detected!`n`nA configuration file has been generated at:`n$ConfigFile`n`nPlease open it and enter your IT network paths.", "Setup Required", "OK", "Information")
+    [System.Windows.MessageBox]::Show("First run detected!`n`nA configuration file has been generated at:`n$ConfigFile`n`nYour personal SID has been automatically added to the MasterAdmins list. Please open the config file and enter your IT network paths.", "Setup Required", "OK", "Information")
     Exit
 }
 
-# Load Configuration
+# Load configuration
 try {
     $Config = Get-Content $ConfigFile -Raw | ConvertFrom-Json
 
@@ -53,7 +54,7 @@ try {
     Exit
 }
 
-# --- Prerequisite Folder & File Checks ---
+# Prerequisite folder and file checks
 $RequiredFolders = @(
     (Join-Path $SharedRoot "Logs"),
     (Join-Path $SharedRoot "Logs\Presence"),
@@ -84,7 +85,7 @@ if (-not (Test-Path $psExecPath)) {
     }
 }
 
-# --- Theme Engine & User Preferences ---
+# Theme engine and user preferences
 $Themes = [ordered]@{
     "Solarized Dark"     = @{ BG_Main="#002B36"; BG_Sec="#073642"; BG_Con="#001E26"; BG_Btn="#083642"; Acc_Pri="#268BD2"; Acc_Sec="#2AA198" }
     "PNW (Default)"      = @{ BG_Main="#1E1E1E"; BG_Sec="#111111"; BG_Con="#0C0C0C"; BG_Btn="#2D2D30"; Acc_Pri="#00A2ED"; Acc_Sec="#00FF00" }
@@ -102,14 +103,16 @@ $Themes = [ordered]@{
 }
 
 $UsersFile = Join-Path -Path $CoreFolder -ChildPath "users.json"
-$UserPrefs = @{}
+$global:UserPrefs = @{}
 
 # Load existing preferences
 if (Test-Path $UsersFile) {
     try {
         $rawPrefs = Get-Content $UsersFile -Raw | ConvertFrom-Json
-        foreach ($prop in $rawPrefs.psobject.properties) {
-            $UserPrefs[$prop.Name] = $prop.Value
+        if ($rawPrefs) {
+            foreach ($prop in $rawPrefs.psobject.properties) {
+                $global:UserPrefs[$prop.Name] = $prop.Value
+            }
         }
     } catch {}
 }
@@ -118,8 +121,8 @@ if (Test-Path $UsersFile) {
 $ActiveThemeName = "Solarized Dark"
 $ActiveColors = $Themes[$ActiveThemeName]
 
-if ($UserPrefs.ContainsKey($env:USERNAME)) {
-    $pref = $UserPrefs[$env:USERNAME]
+if ($global:UserPrefs.ContainsKey($env:USERNAME)) {
+    $pref = $global:UserPrefs[$env:USERNAME]
     if ($pref.ThemeName -eq "Custom" -and $null -ne $pref.CustomColors) {
         $ActiveThemeName = "Custom"
         $ActiveColors = @{
@@ -144,12 +147,66 @@ function Update-ThemeB64 {
 }
 Update-ThemeB64
 
-# --- Initialize Async Runspace Pool ---
+# Security: Nickname prompt for pseudonymization
+$global:TechNickname = "Unknown"
+
+if ($global:UserPrefs.ContainsKey($env:USERNAME) -and $null -ne $global:UserPrefs[$env:USERNAME].Nickname) {
+    $global:TechNickname = $global:UserPrefs[$env:USERNAME].Nickname
+} else {
+    [string]$NickXAML = @"
+    <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            Title="UHDC Security Setup" SizeToContent="Height" Width="480" Background="$($ActiveColors.BG_Main)" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
+        <StackPanel Margin="20">
+            <TextBlock Text="Welcome to the UHDC" Foreground="$($ActiveColors.Acc_Pri)" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
+            <TextBlock Text="To protect your privacy and prevent PII leakage in our audit logs, please provide a Nickname or your First Name." Foreground="White" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,10"/>
+            <TextBlock Text="SECURITY WARNING: Do NOT enter your Active Directory username or full name." Foreground="#FF4444" FontSize="12" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,15"/>
+
+            <TextBox Name="InputBox" Background="$($ActiveColors.BG_Sec)" Foreground="$($ActiveColors.Acc_Pri)" FontSize="16" Height="30" Padding="4" BorderBrush="#555"/>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                <Button Name="BtnOK" Content="Save Profile" Width="120" Height="35" Background="$($ActiveColors.Acc_Pri)" Foreground="$($ActiveColors.BG_Main)" Cursor="Hand" BorderThickness="0" FontWeight="Bold" IsDefault="True">
+                    <Button.Resources>
+                        <Style TargetType="Border"><Setter Property="CornerRadius" Value="4"/></Style>
+                    </Button.Resources>
+                </Button>
+            </StackPanel>
+        </StackPanel>
+    </Window>
+"@
+    $StringReader = New-Object System.IO.StringReader $NickXAML
+    $XmlReader = [System.Xml.XmlReader]::Create($StringReader)
+    $NickWin = [System.Windows.Markup.XamlReader]::Load($XmlReader)
+
+    $InputBox = $NickWin.FindName("InputBox")
+    $BtnOK = $NickWin.FindName("BtnOK")
+
+    $NickWin.Add_Loaded({ $InputBox.Focus() })
+    $BtnOK.Add_Click({ $NickWin.DialogResult = $true })
+
+    if ($NickWin.ShowDialog() -eq $true -and -not [string]::IsNullOrWhiteSpace($InputBox.Text)) {
+        $global:TechNickname = $InputBox.Text.Trim()
+    } else {
+        $global:TechNickname = "Tech_$((Get-Random -Maximum 9999))"
+    }
+
+    if (-not $global:UserPrefs.ContainsKey($env:USERNAME)) {
+        $global:UserPrefs[$env:USERNAME] = [PSCustomObject]@{ ThemeName = "PNW (Default)" }
+    }
+    $global:UserPrefs[$env:USERNAME] | Add-Member -MemberType NoteProperty -Name "Nickname" -Value $global:TechNickname -Force
+
+    try {
+        $exportObj = New-Object PSObject
+        foreach ($key in $global:UserPrefs.Keys) { $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $global:UserPrefs[$key] -Force }
+        $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
+    } catch {}
+}
+
+# Initialize async runspace pool
 $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 15)
 $RunspacePool.ApartmentState = "STA"
 $RunspacePool.Open()
 
-# --- Define the UI (XAML) ---
+# Define the UI (XAML)
 [string]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -445,7 +502,7 @@ $RunspacePool.Open()
                                 <Button Name="BtnRegDNS" Content="Fix/Reg DNS" Width="85" Height="30" Margin="2" Style="{StaticResource ActionBtn}" ToolTip="Force the target PC to update its IP records with the Domain Controller."/>
                                 <Button Name="BtnFixSpool" Content="Fix Spooler" Width="85" Height="30" Margin="2" Style="{StaticResource ActionBtn}" ToolTip="Restart the print spooler service to clear stuck print jobs."/>
                                 <Button Name="BtnGPUpdate" Content="Force GPUpdate" Width="110" Height="30" Margin="2" Style="{StaticResource ActionBtn}" ToolTip="Force a background Group Policy update on the target PC."/>
-                                <Button Name="BtnMapDrives" Content="Push Refresh Drives" Width="135" Height="30" Margin="2" Style="{StaticResource ActionBtn}" ToolTip="Force the target PC to reconnect missing network drives."/>
+                                <Button Name="BtnMapDrives" Content="Remap Drives" Width="110" Height="30" Margin="2" Style="{StaticResource ActionBtn}" ToolTip="Force the target PC to reconnect missing network drives."/>
                                 <Button Name="BtnRemInstall" Content="Remote Install" Width="110" Height="30" Margin="2" Style="{StaticResource ActionBtn}" ToolTip="Push standard software packages silently to the target PC."/>
                                 <Button Name="BtnDeepClean" Content="Deep Clean" Width="95" Height="30" Margin="2" Style="{StaticResource WarningBtn}" ToolTip="Clear temp files, web caches, and windows update files remotely."/>
                                 <Button Name="BtnRestartSCCM" Content="Restart SCCM" Width="100" Height="30" Margin="2" Style="{StaticResource WarningBtn}" ToolTip="Restart the local SMS Agent Host service to fix SCCM hangs."/>
@@ -464,10 +521,12 @@ $RunspacePool.Open()
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBlock Name="StatusBar" Grid.Column="0" Text="Ready..." Foreground="#28A745" FontWeight="Bold" VerticalAlignment="Center"/>
-            <Button Name="BtnTheme" Grid.Column="1" Content="[Theme Settings]" Background="Transparent" Foreground="{DynamicResource AccPriBrush}" BorderThickness="0" Cursor="Hand" Margin="0,0,20,0" FontWeight="Bold"/>
-            <CheckBox Name="CbTrainingMode" Grid.Column="2" Content="Training Mode" Foreground="#FFD700" FontWeight="Bold" VerticalAlignment="Center" ToolTip="Enable interactive step-by-step execution." Cursor="Hand"/>
+            <TextBlock Name="MainXpText" Grid.Column="1" Text="Level 1 | 0 XP" Foreground="#FFD700" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,20,0" ToolTip="Your cumulative Help Desk experience."/>
+            <Button Name="BtnTheme" Grid.Column="2" Content="[Theme Settings]" Background="Transparent" Foreground="{DynamicResource AccPriBrush}" BorderThickness="0" Cursor="Hand" Margin="0,0,20,0" FontWeight="Bold"/>
+            <CheckBox Name="CbTrainingMode" Grid.Column="3" Content="Training Mode" Foreground="#FFD700" FontWeight="Bold" VerticalAlignment="Center" ToolTip="Enable interactive step-by-step execution." Cursor="Hand"/>
         </Grid>
     </Grid>
 </Window>
@@ -485,7 +544,7 @@ $StringReader = New-Object System.IO.StringReader $XAML
 $XmlReader = [System.Xml.XmlReader]::Create($StringReader)
 $Form = [System.Windows.Markup.XamlReader]::Load($XmlReader)
 
-# --- Theme Updater ---
+# Theme updater
 function Update-AppTheme($Colors) {
     try {
         $Form.Resources["BgMainColor"] = [System.Windows.Media.ColorConverter]::ConvertFromString($Colors.BG_Main)
@@ -500,26 +559,27 @@ function Update-AppTheme($Colors) {
     } catch {}
 }
 
-# --- Map UI Elements & RBAC ---
+# Map UI elements and RBAC
 $ADInput         = $Form.FindName("ADInput")
 $PluginInput     = $Form.FindName("PluginInput")
 $ComputerInput   = $Form.FindName("ComputerInput")
 $UserSelectCombo = $Form.FindName("UserSelectCombo")
 $StatusBar       = $Form.FindName("StatusBar")
+$MainXpText      = $Form.FindName("MainXpText")
 $CbTrainingMode  = $Form.FindName("CbTrainingMode")
 $BtnTheme        = $Form.FindName("BtnTheme")
 
-# Output Consoles
+# Output consoles
 $ADOutputConsole       = $Form.FindName("ADOutputConsole")
 $PluginOutputConsole   = $Form.FindName("PluginOutputConsole")
 $ComputerOutputConsole = $Form.FindName("ComputerOutputConsole")
 $OnlineUsersConsole    = $Form.FindName("OnlineUsersConsole")
 
-# MOTD Elements
+# MOTD elements
 $MotdCanvas     = $Form.FindName("MotdCanvas")
 $MotdScrollText = $Form.FindName("MotdScrollText")
 
-# Q1/Q3 Buttons
+# Q1/Q3 buttons
 $BtnADLookup       = $Form.FindName("BtnADLookup")
 $BtnDisabledAD     = $Form.FindName("BtnDisabledAD")
 $BtnSCCM           = $Form.FindName("BtnSCCM")
@@ -537,7 +597,7 @@ $BtnBookmarkBackup = $Form.FindName("BtnBookmarkBackup")
 $BtnBrowserReset   = $Form.FindName("BtnBrowserReset")
 $BtnDeploy         = $Form.FindName("BtnDeploy")
 
-# Q2 Buttons
+# Q2 buttons
 $BtnNetInfo     = $Form.FindName("BtnNetInfo")
 $BtnUptime      = $Form.FindName("BtnUptime")
 $BtnGetLogs     = $Form.FindName("BtnGetLogs")
@@ -556,36 +616,64 @@ $BtnRemInstall  = $Form.FindName("BtnRemInstall")
 $BtnRestart     = $Form.FindName("BtnRestart")
 $BtnGlobalMap   = $Form.FindName("BtnGlobalMap")
 
-# Q4 Communications Buttons
+# Q4 communications buttons
 $BtnNetSend = $Form.FindName("BtnNetSend")
 $BtnAddMOTD = $Form.FindName("BtnAddMOTD")
 $BtnDelMOTD = $Form.FindName("BtnDelMOTD")
 
-# Role-Based Access Control
-if (-not ($MasterAdmins -contains $env:USERNAME)) {
+# Role-based access control via SIDs
+$currentUserSID = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+
+if (-not ($MasterAdmins -contains $currentUserSID)) {
     $BtnGlobalMap.Visibility = "Collapsed"
     $BtnDeploy.Visibility = "Collapsed"
 }
 
-if ($Trainees -contains $env:USERNAME) {
+if ($Trainees -contains $currentUserSID) {
     $CbTrainingMode.IsChecked = $true
 }
 
-# --- Audit Logging ---
+# XP Display Updater
+function Update-MainXpDisplay {
+    $currentXP = 0
+    if ($global:UserPrefs.ContainsKey($env:USERNAME)) {
+        $uPref = $global:UserPrefs[$env:USERNAME]
+        if ($null -ne $uPref.psobject.properties['XP']) {
+            $currentXP = [int]$uPref.XP
+        }
+    }
+    $level = [math]::Floor($currentXP / 500) + 1
+    $MainXpText.Text = "Level $level | $currentXP XP"
+}
+
+# Initialize XP display on load
+Update-MainXpDisplay
+
+# Audit logging
+function Mask-PII ([string]$InputString) {
+    if ([string]::IsNullOrWhiteSpace($InputString)) { return "N/A" }
+    if ($InputString -notmatch "\." -and $InputString.Length -gt 3) {
+        $first = $InputString.Substring(0,1)
+        $last = $InputString.Substring($InputString.Length - 1, 1)
+        return "$first***$last"
+    }
+    return $InputString
+}
+
 function Write-AuditLog {
     param([string]$Action, [string]$Target)
     try {
         $LogEntry = [PSCustomObject]@{
             Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-            Tech      = $env:USERNAME
-            Target    = if ($Target) { $Target } else { "N/A" }
+            Tech      = $global:TechNickname
+            Target    = if ($Target) { Mask-PII $Target } else { "N/A" }
             Action    = $Action
         }
         $LogEntry | Export-Csv -Path $AuditLogPath -Append -NoTypeInformation -Force
     } catch { }
 }
 
-# --- Interactive Training Engine ---
+# Interactive training engine
 $global:UHDCSync = [hashtable]::Synchronized(@{
     StepReady  = $false
     StepDesc   = ""
@@ -647,7 +735,7 @@ function Show-StepDialog {
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Text="Underlying PowerShell Logic:" Foreground="%%ACC_PRI%%" FontSize="13" FontWeight="Bold" VerticalAlignment="Bottom"/>
+                <TextBlock Text="Underlying Logic:" Foreground="%%ACC_PRI%%" FontSize="13" FontWeight="Bold" VerticalAlignment="Bottom"/>
                 <Button Name="BtnCopy" Grid.Column="1" Content="Copy Code" Width="90" Height="24" Style="{StaticResource GlassBtn}" FontSize="11"/>
             </Grid>
 
@@ -718,15 +806,16 @@ function Show-StepDialog {
     $RawCode = $global:UHDCSync.StepCode
     $StepDesc.Text = $global:UHDCSync.StepDesc
 
-    # XP Tracking
+    # XP tracking
     $currentXP = 0
-    if ($UserPrefs.ContainsKey($env:USERNAME)) {
-        $uPref = $UserPrefs[$env:USERNAME]
+    if ($global:UserPrefs.ContainsKey($env:USERNAME)) {
+        $uPref = $global:UserPrefs[$env:USERNAME]
         if ($null -ne $uPref.psobject.properties['XP']) {
             $currentXP = [int]$uPref.XP
         }
     } else {
-        $UserPrefs[$env:USERNAME] = [PSCustomObject]@{ ThemeName = "PNW (Default)" }
+        $global:UserPrefs[$env:USERNAME] = [PSCustomObject]@{ ThemeName = "PNW (Default)" }
+        $uPref = $global:UserPrefs[$env:USERNAME]
     }
 
     $xpGain = 50
@@ -734,7 +823,6 @@ function Show-StepDialog {
     $level = [math]::Floor($newXP / 500) + 1
     $XpText.Text = "LEVEL $level | $newXP XP (+$xpGain XP)"
 
-    $uPref = $UserPrefs[$env:USERNAME]
     if ($null -eq $uPref.psobject.properties['XP']) {
         $uPref | Add-Member -MemberType NoteProperty -Name 'XP' -Value $newXP
     } else {
@@ -743,13 +831,13 @@ function Show-StepDialog {
 
     try {
         $exportObj = New-Object PSObject
-        foreach ($key in $UserPrefs.Keys) { 
-            $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $UserPrefs[$key] -Force
+        foreach ($key in $global:UserPrefs.Keys) { 
+            $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $global:UserPrefs[$key] -Force
         }
         $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
     } catch {}
 
-    # Syntax Highlighting
+    # Syntax highlighting
     $Paragraph = New-Object System.Windows.Documents.Paragraph
     $Tokens = [regex]::Matches($RawCode, "(`".*?`"|'.*?'|\\\$[a-zA-Z0-9_:]+|-[a-zA-Z0-9_]+|[a-zA-Z]+-[a-zA-Z]+|[^\s]+|\s+)")
 
@@ -774,7 +862,7 @@ function Show-StepDialog {
     }
     $CodeDoc.Blocks.Add($Paragraph)
 
-    # Copy Code
+    # Copy code
     $BtnCopy.Add_Click({
         [System.Windows.Clipboard]::SetText($RawCode)
         $BtnCopy.Content = "Copied!"
@@ -790,7 +878,7 @@ function Show-StepDialog {
         $resetTimer.Start()
     })
 
-    # Parameter Breakdown
+    # Parameter breakdown
     $paramRegex = '(?<param>-[a-zA-Z0-9]+)\s+(?<val>''[^'']*''|"[^"]*"|\$?[a-zA-Z0-9_:\\]+)'
     $paramMatches = [regex]::Matches($RawCode, $paramRegex)
 
@@ -815,7 +903,7 @@ function Show-StepDialog {
         }
     }
 
-    # Failure Points
+    # Failure points
     $failMsg = ""
     if ($RawCode -match "Invoke-Command") {
         $failMsg = "- WinRM (Port 5985) is blocked by the target's Windows Firewall.`n- The target PC is turned off or off the VPN.`n- Your admin account lacks local admin rights on the target."
@@ -834,7 +922,7 @@ function Show-StepDialog {
         $FailureTxt.Text = $failMsg
     }
 
-    # Button Event Handlers
+    # Button event handlers
     $BtnAbort.Add_Click({
         $global:UHDCSync.StepResult = $false
         $global:UHDCSync.StepAck = $true
@@ -852,6 +940,7 @@ function Show-StepDialog {
             $global:UHDCSync.StepResult = $false
             $global:UHDCSync.StepAck = $true
         }
+        Update-MainXpDisplay
     })
 
     $StepWin.ShowDialog() | Out-Null
@@ -867,7 +956,7 @@ $TrainingTimer.Add_Tick({
 })
 $TrainingTimer.Start()
 
-# --- Async Execution Engine ---
+# Async execution engine
 function Invoke-UHDCScriptAsync {
     param(
         [string]$ScriptName,
@@ -886,7 +975,7 @@ function Invoke-UHDCScriptAsync {
     }
 
     $ScriptPath = Join-Path $ScriptDir $ScriptName
-    $TargetOutputConsole.Text += ">>> Executing $ScriptName...`r`n"
+    $TargetOutputConsole.Text += "> Executing $ScriptName...`r`n"
 
     $PS = [powershell]::Create()
     [void]$PS.AddScript({
@@ -917,7 +1006,7 @@ function Invoke-UHDCScriptAsync {
                     $NewPC = $matches[1].Trim()
                     $PC1.Text = $NewPC
                     $PC2.Text = $NewPC
-                    $OutBox.Text += "[INTEL] Auto-Filled Target PC: $NewPC to Action panels.`r`n"
+                    $OutBox.Text += "[Intel] Auto-filled target PC: $NewPC to action panels.`r`n"
                     $Result = $Result -replace '(?m)\[GUI:UPDATE_TARGET:.+?\]\r?\n?', ''
                 }
                 $OutBox.Text += $Result
@@ -926,7 +1015,7 @@ function Invoke-UHDCScriptAsync {
         } catch {
             $errMessage = $_.Exception.Message
             $Dispatcher.Invoke([Action]{
-                $OutBox.Text += "[!] ERROR: $errMessage`r`n"
+                $OutBox.Text += "[!] Error: $errMessage`r`n"
             })
         }
     })
@@ -948,7 +1037,7 @@ function Invoke-UHDCScriptAsync {
     [void]$PS.BeginInvoke()
 }
 
-# --- Theme Picker GUI ---
+# Theme picker GUI
 function Show-ThemePicker {
     [string]$ThemeXAML = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -1113,8 +1202,8 @@ function Show-ThemePicker {
 
     $BtnSave.Add_Click({
         $sel = $ThemeCombo.SelectedItem
-        $newPrefs = @{ ThemeName = $sel; CustomColors = $null }
         $colorsToApply = $Themes[$sel]
+        $customColors = $null
 
         if ($sel -eq "Custom") {
             $hexRegex = "^#[0-9A-Fa-f]{6}$"
@@ -1123,25 +1212,33 @@ function Show-ThemePicker {
                 $ThemeStatus.Foreground = "Red"
                 return
             }
-            $newPrefs.CustomColors = @{
+            $customColors = @{
                 BG_Main = $TxtBgMain.Text; BG_Sec = $TxtBgSec.Text; BG_Con = $TxtBgCon.Text
                 BG_Btn = $TxtBgBtn.Text; Acc_Pri = $TxtAccPri.Text; Acc_Sec = $TxtAccSec.Text
             }
-            $colorsToApply = $newPrefs.CustomColors
+            $colorsToApply = $customColors
         }
 
-        $UserPrefs[$env:USERNAME] = $newPrefs
+        # Safely update existing profile to preserve XP and Nickname
+        $uPref = $global:UserPrefs[$env:USERNAME]
+        if ($null -eq $uPref) {
+            $uPref = [PSCustomObject]@{}
+            $global:UserPrefs[$env:USERNAME] = $uPref
+        }
+
+        $uPref | Add-Member -MemberType NoteProperty -Name "ThemeName" -Value $sel -Force
+        $uPref | Add-Member -MemberType NoteProperty -Name "CustomColors" -Value $customColors -Force
 
         try {
             $exportObj = New-Object PSObject
-            foreach ($key in $UserPrefs.Keys) {
-                $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $UserPrefs[$key] -Force
+            foreach ($key in $global:UserPrefs.Keys) {
+                $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $global:UserPrefs[$key] -Force
             }
             $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
 
             Update-AppTheme $colorsToApply
 
-            $ThemeStatus.Text = "Saved and Applied!"
+            $ThemeStatus.Text = "Saved and applied!"
             $ThemeStatus.Foreground = "#00FF00"
         } catch {
             $ThemeStatus.Text = "Error saving to users.json"
@@ -1156,7 +1253,7 @@ $BtnTheme.Add_Click({
     Show-ThemePicker
 })
 
-# --- Button Logic & Event Mapping ---
+# Button logic and event mapping
 
 # Q1: AD Intelligence & Actions
 $ADInput.Add_KeyDown({
@@ -1217,7 +1314,7 @@ $UserSelectCombo.Add_SelectionChanged({
 })
 
 $BtnDisabledAD.Add_Click({
-    $ADOutputConsole.Text += ">>> Querying Active Directory for all Disabled Users...`r`n"
+    $ADOutputConsole.Text += "> Querying Active Directory for all disabled users...`r`n"
     [System.Windows.Forms.Application]::DoEvents()
 
     try {
@@ -1225,7 +1322,7 @@ $BtnDisabledAD.Add_Click({
                          Select-Object Name, SamAccountName, Title, Office, Department
 
         if ($DisabledUsers) {
-            $ADOutputConsole.Text += "[SUCCESS] Found $($DisabledUsers.Count) disabled accounts. Opening grid view...`r`n"
+            $ADOutputConsole.Text += "[Success] Found $($DisabledUsers.Count) disabled accounts. Opening grid view...`r`n"
             $DisabledUsers | Out-GridView -Title "Active Directory - Disabled Accounts Report"
             Write-AuditLog -Action "Pulled Disabled AD Users Report" -Target "Global"
         } else {
@@ -1233,7 +1330,7 @@ $BtnDisabledAD.Add_Click({
         }
     } catch {
         $errMessage = $_.Exception.Message
-        $ADOutputConsole.Text += "[!] ERROR querying AD: $errMessage`r`n"
+        $ADOutputConsole.Text += "[!] Error querying AD: $errMessage`r`n"
     }
     $ADOutputConsole.ScrollToEnd()
 })
@@ -1242,10 +1339,10 @@ $BtnUnlock.Add_Click({
     $Target = $ADInput.Text
     if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
-    $ADOutputConsole.Text += ">>> Attempting to unlock AD Account: $Target...`r`n"
+    $ADOutputConsole.Text += "> Attempting to unlock AD account: $Target...`r`n"
     try {
         Unlock-ADAccount -Identity $Target -ErrorAction Stop
-        $ADOutputConsole.Text += "[SUCCESS] Account Unlocked.`r`n"
+        $ADOutputConsole.Text += "[Success] Account unlocked.`r`n"
         Write-AuditLog -Action "Unlocked AD Account" -Target $Target
     } catch {
         $ADOutputConsole.Text += "[!] Failed to unlock account.`r`n"
@@ -1260,14 +1357,14 @@ $BtnResetPwd.Add_Click({
     $NewPwd = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the NEW PASSWORD for $($Target):", "Reset AD Password", "")
     if ([string]::IsNullOrWhiteSpace($NewPwd)) { return }
 
-    $ADOutputConsole.Text += ">>> Attempting to reset AD Password for: $Target...`r`n"
+    $ADOutputConsole.Text += "> Attempting to reset AD password for: $Target...`r`n"
     [System.Windows.Forms.Application]::DoEvents()
 
     try {
         $securePwd = ConvertTo-SecureString $NewPwd -AsPlainText -Force
         Set-ADAccountPassword -Identity $Target -NewPassword $securePwd -Reset -ErrorAction Stop
         Set-ADUser -Identity $Target -ChangePasswordAtLogon $false -ErrorAction Stop
-        $ADOutputConsole.Text += "[SUCCESS] Password reset successfully.`r`n"
+        $ADOutputConsole.Text += "[Success] Password reset successfully.`r`n"
         Write-AuditLog -Action "Reset AD Password" -Target $Target
     } catch {
         $ADOutputConsole.Text += "[!] Failed to reset password.`r`n"
@@ -1327,16 +1424,17 @@ $BtnAddLoc.Add_Click({
     $PCName = [Microsoft.VisualBasic.Interaction]::InputBox("2. Enter the COMPUTER NAME for $($User):", "Manual History Entry", $ComputerInput.Text)
     if ([string]::IsNullOrWhiteSpace($PCName)) { return }
 
-    $ADOutputConsole.Text += ">>> Manually assigning '$PCName' to user '$User'...`r`n"
+    $ADOutputConsole.Text += "> Manually assigning '$PCName' to user '$User'...`r`n"
     $HelperPath = Join-Path -Path $CoreFolder -ChildPath "Helper_UpdateHistory.ps1"
 
     if (Test-Path $HelperPath) {
         & $HelperPath -User $User -Computer $PCName -SharedRoot $SharedRoot
-        $ADOutputConsole.Text += "[SUCCESS] History Database Updated.`r`n"
+        $ADOutputConsole.Text += "[Success] History database updated.`r`n"
     }
     $ADOutputConsole.ScrollToEnd()
 })
 
+# Decrypt history for GUI grid
 $BtnRemLoc.Add_Click({
     $TargetUser = $ADInput.Text
     if ([string]::IsNullOrWhiteSpace($TargetUser)) {
@@ -1350,26 +1448,51 @@ $BtnRemLoc.Add_Click({
         return
     }
 
-    $allData = Get-Content $HistoryFile -Raw | ConvertFrom-Json
-    $userPCs = $allData | Where-Object { $_.User -eq $TargetUser }
+    $UHDCKey = [byte[]](0x5A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0xAD, 0xBE, 0xCF, 0xD0, 0xE1, 0xF2, 0x03, 0x14, 0x25, 0x36, 0x47, 0x58, 0x69, 0x7A, 0x8B, 0x9C, 0xAD, 0xBE, 0xCF, 0xD0, 0xE1, 0xF2, 0x03)
+    $UHDCIV  = [byte[]](0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10)
 
-    if ($null -eq $userPCs -or $userPCs.Count -eq 0) {
+    $allData = Get-Content $HistoryFile -Raw | ConvertFrom-Json
+    if ($allData -isnot [System.Array]) { $allData = @($allData) }
+
+    $userPCs = @()
+    foreach ($entry in $allData) {
+        try {
+            $aes = [System.Security.Cryptography.Aes]::Create()
+            $aes.Key = $UHDCKey; $aes.IV = $UHDCIV
+            $decryptor = $aes.CreateDecryptor()
+
+            $bytes = [Convert]::FromBase64String($entry.User)
+            $decUser = [System.Text.Encoding]::UTF8.GetString($decryptor.TransformFinalBlock($bytes, 0, $bytes.Length))
+
+            if ($decUser -eq $TargetUser) {
+                $bytesPC = [Convert]::FromBase64String($entry.Computer)
+                $decPC = [System.Text.Encoding]::UTF8.GetString($decryptor.TransformFinalBlock($bytesPC, 0, $bytesPC.Length))
+
+                $userPCs += [PSCustomObject]@{
+                    User = $decUser
+                    Computer = $decPC
+                    LastSeen = $entry.LastSeen
+                    Source = $entry.Source
+                }
+            }
+        } catch {}
+    }
+
+    if ($userPCs.Count -eq 0) {
         [System.Windows.MessageBox]::Show("No computer history found for '$TargetUser'.", "Empty History", "OK", "Information")
         return
     }
 
-    if ($userPCs -isnot [System.Array]) { $userPCs = @($userPCs) }
-
     $PCtoRemove = $userPCs | Select-Object User, Computer, LastSeen, Source | Out-GridView -Title "Select the PC to REMOVE for $TargetUser" -PassThru
 
     if ($PCtoRemove) {
-        $ADOutputConsole.Text += ">>> Removing '$($PCtoRemove.Computer)' from '$($TargetUser)'...`r`n"
+        $ADOutputConsole.Text += "> Removing '$($PCtoRemove.Computer)' from '$($TargetUser)'...`r`n"
         [System.Windows.Forms.Application]::DoEvents()
 
         $HelperPath = Join-Path -Path $CoreFolder -ChildPath "Helper_RemoveHistory.ps1"
         if (Test-Path $HelperPath) {
             & $HelperPath -User $TargetUser -Computer $PCtoRemove.Computer -SharedRoot $SharedRoot
-            $ADOutputConsole.Text += "[SUCCESS] PC Removed and Database Protected.`r`n"
+            $ADOutputConsole.Text += "[Success] PC removed and database protected.`r`n"
         } else {
             $ADOutputConsole.Text += "[!] Error: Helper_RemoveHistory.ps1 is missing from Core folder.`r`n"
         }
@@ -1392,7 +1515,7 @@ $BtnSCCM.Add_Click({
         if (Test-Path $sccmPath) {
             Start-Process $sccmPath $ComputerInput.Text
         } else {
-            $ComputerOutputConsole.Text += "[!] ERROR: CmRcViewer.exe not found. Is the SCCM Admin Console installed locally?`r`n"
+            $ComputerOutputConsole.Text += "[!] Error: CmRcViewer.exe not found. Is the SCCM Admin Console installed locally?`r`n"
             $ComputerOutputConsole.ScrollToEnd()
         }
     }
@@ -1421,7 +1544,7 @@ $BtnLAPS.Add_Click({
     $Target = $ComputerInput.Text
     if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
-    $ComputerOutputConsole.Text += ">>> Querying LAPS Password for $Target...`r`n"
+    $ComputerOutputConsole.Text += "> Querying LAPS password for $Target...`r`n"
     [System.Windows.Forms.Application]::DoEvents()
 
     try {
@@ -1429,7 +1552,7 @@ $BtnLAPS.Add_Click({
         $pwd = if ($laps."ms-Mcs-AdmPwd") { $laps."ms-Mcs-AdmPwd" } elseif ($laps."msLAPS-Password") { $laps."msLAPS-Password" } else { $null }
 
         if ($pwd) {
-            $ComputerOutputConsole.Text += "[SUCCESS] Local Admin Password: $pwd`r`n"
+            $ComputerOutputConsole.Text += "[Success] Local admin password: $pwd`r`n"
             Write-AuditLog -Action "Viewed LAPS Password" -Target $Target
         } else {
             $ComputerOutputConsole.Text += "[!] No LAPS password found.`r`n"
@@ -1449,7 +1572,7 @@ $BtnDeploy.Add_Click({
         return
     }
 
-    $ComputerOutputConsole.Text += ">>> Deploying UHDC Network Shortcut to $TgtPC...`r`n"
+    $ComputerOutputConsole.Text += "> Deploying UHDC network shortcut to $TgtPC...`r`n"
 
     $PS = [powershell]::Create()
     [void]$PS.AddScript({
@@ -1482,11 +1605,11 @@ $BtnDeploy.Add_Click({
             Copy-Item $LocalLnk -Destination "$Desktop\UHDC.lnk" -Force
 
             $Dispatcher.Invoke([Action]{
-                $Console.Text += "[SUCCESS] Deployed Shortcut to $PC Desktop.`r`n"
+                $Console.Text += "[Success] Deployed shortcut to $PC desktop.`r`n"
             })
         } catch {
             $err = $_.Exception.Message
-            $Dispatcher.Invoke([Action]{ $Console.Text += "[!] DEPLOY ERROR: $err`r`n" })
+            $Dispatcher.Invoke([Action]{ $Console.Text += "[!] Deploy error: $err`r`n" })
         }
     })
 
@@ -1519,7 +1642,7 @@ $BtnUptime.Add_Click({
 })
 
 $BtnGetLogs.Add_Click({
-    $Keyword = [Microsoft.VisualBasic.Interaction]::InputBox("Enter a keyword to search System/Application logs.`n`n(Leave blank to just pull the last 5 Critical/Error logs):", "Search PC Logs", "")
+    $Keyword = [Microsoft.VisualBasic.Interaction]::InputBox("Enter a keyword to search System/Application logs.`n`n(Leave blank to just pull the last 50 Critical/Error logs):", "Search PC Logs", "")
     if ($null -eq $Keyword) { return }
 
     Write-AuditLog -Action "Pulled PC Event Logs" -Target $PluginInput.Text
@@ -1600,18 +1723,9 @@ $BtnGPUpdate.Add_Click({
                            -ScriptDir $ToolsFolder
 })
 
-$BtnRestartSCCM.Add_Click({
-    Write-AuditLog -Action "Restarted SCCM Agent" -Target $PluginInput.Text
-    Invoke-UHDCScriptAsync -ScriptName "Restart-SCCMAgent.ps1" `
-                           -RequiresTarget $true `
-                           -SourceInputBox $PluginInput `
-                           -TargetOutputConsole $PluginOutputConsole `
-                           -ScriptDir $ToolsFolder
-})
-
 $BtnMapDrives.Add_Click({
-    Write-AuditLog -Action "Pushed Network Drives Refresh" -Target $PluginInput.Text
-    Invoke-UHDCScriptAsync -ScriptName "PushRefreshDrives.ps1" -RequiresTarget $true -SourceInputBox $PluginInput -TargetOutputConsole $PluginOutputConsole -ScriptDir $ToolsFolder
+    Write-AuditLog -Action "Pushed RemapDrives.cmd" -Target $PluginInput.Text
+    Invoke-UHDCScriptAsync -ScriptName "RemapNetworkDrives.ps1" -RequiresTarget $true -SourceInputBox $PluginInput -TargetOutputConsole $PluginOutputConsole -ScriptDir $ToolsFolder
 })
 
 $BtnDeepClean.Add_Click({
@@ -1642,28 +1756,28 @@ $BtnRestart.Add_Click({
 
 # Q4: Command Center & Communications
 $BtnNetSend.Add_Click({
-    $Target = if ($ComputerInput.Text) { $ComputerInput.Text } else { [Microsoft.VisualBasic.Interaction]::InputBox("Enter the Target PC Name:", "Net Send", "") }
+    $Target = if ($ComputerInput.Text) { $ComputerInput.Text } else { [Microsoft.VisualBasic.Interaction]::InputBox("Enter the target PC name:", "Net Send", "") }
     if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
     $Msg = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the pop-up message to send to $($Target):", "Net Send", "")
     if ([string]::IsNullOrWhiteSpace($Msg)) { return }
 
-    $OnlineUsersConsole.Text += ">>> Sending network pop-up to $Target...`r`n"
+    $OnlineUsersConsole.Text += "> Sending network pop-up to $Target...`r`n"
     [System.Windows.Forms.Application]::DoEvents()
 
     $Output = & cmd.exe /c "msg * /server:$Target `"$Msg`" 2>&1"
 
     if ($LASTEXITCODE -eq 0 -or [string]::IsNullOrWhiteSpace($Output)) {
-        $OnlineUsersConsole.Text += "[SUCCESS] Message delivered to $Target.`r`n"
+        $OnlineUsersConsole.Text += "[Success] Message delivered to $Target.`r`n"
         Write-AuditLog -Action "Sent Net Send Message" -Target $Target
     } else {
-        $OnlineUsersConsole.Text += "[!] FAILED: $Output`r`n"
+        $OnlineUsersConsole.Text += "[!] Failed: $Output`r`n"
     }
     $OnlineUsersConsole.ScrollToEnd()
 })
 
 $BtnAddMOTD.Add_Click({
-    $txt = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the Global Announcement text:", "New MOTD", "")
+    $txt = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the global announcement text:", "New MOTD", "")
     if ($txt) {
         $MOTDFile = Join-Path -Path $SharedRoot -ChildPath "MOTD.json"
         $allMOTDs = if (Test-Path $MOTDFile) { Get-Content $MOTDFile -Raw | ConvertFrom-Json } else { @() }
@@ -1684,7 +1798,7 @@ $BtnDelMOTD.Add_Click({
     if ($null -eq $allMOTDs) { return }
     $allMOTDs = if ($allMOTDs -is [System.Array]) { $allMOTDs } else { @($allMOTDs) }
 
-    $MotdToDelete = $allMOTDs | Out-GridView -Title "Select Announcement to DELETE" -PassThru
+    $MotdToDelete = $allMOTDs | Out-GridView -Title "Select announcement to delete" -PassThru
     if ($MotdToDelete) {
         $newList = @($allMOTDs | Where-Object { $_.Timestamp -ne $MotdToDelete.Timestamp -or $_.Text -ne $MotdToDelete.Text })
         if ($newList.Count -gt 0) {
@@ -1697,7 +1811,7 @@ $BtnDelMOTD.Add_Click({
     }
 })
 
-# --- Background Engines (Presence & Ticker) ---
+# Background engines (Presence and Ticker)
 $ScrollTimer = New-Object System.Windows.Threading.DispatcherTimer
 $ScrollTimer.Interval = [TimeSpan]::FromMilliseconds(20)
 $ScrollTimer.Add_Tick({
@@ -1717,14 +1831,14 @@ $ScrollTimer.Start()
 
 $PresencePS = [powershell]::Create()
 [void]$PresencePS.AddScript({
-    param($PDir, $SRoot, $User, $Dispatcher, $OnlineConsole, $MotdText)
+    param($PDir, $SRoot, $TechNick, $Dispatcher, $OnlineConsole, $MotdText)
 
     $lastDisplay = ""
     $lastMotd = ""
 
     while ($true) {
         try {
-            $MyFile = Join-Path -Path $PDir -ChildPath "Presence_$($User).txt"
+            $MyFile = Join-Path -Path $PDir -ChildPath "Presence_$($TechNick).txt"
             Set-Content -Path $MyFile -Value (Get-Date).Ticks -Force
         } catch {}
 
@@ -1769,7 +1883,7 @@ $PresencePS = [powershell]::Create()
 
 [void]$PresencePS.AddArgument($PresenceDir)
 [void]$PresencePS.AddArgument($SharedRoot)
-[void]$PresencePS.AddArgument($env:USERNAME)
+[void]$PresencePS.AddArgument($global:TechNickname)
 [void]$PresencePS.AddArgument($Form.Dispatcher)
 [void]$PresencePS.AddArgument($OnlineUsersConsole)
 [void]$PresencePS.AddArgument($MotdScrollText)
@@ -1777,7 +1891,7 @@ $PresencePS = [powershell]::Create()
 $PresencePS.RunspacePool = $RunspacePool
 [void]$PresencePS.BeginInvoke()
 
-# --- Launch Application ---
+# Launch application
 $Form.ShowDialog() | Out-Null
 
 $ScrollTimer.Stop()

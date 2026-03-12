@@ -18,7 +18,7 @@ param(
     [hashtable]$SyncHash
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -37,12 +37,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -59,10 +59,10 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
 Write-Host "========================================"
-Write-Host " [UHDC] REMOTE EVENT LOG DIAGNOSTICS"
+Write-Host " [UHDC] Remote event log diagnostics"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -76,7 +76,7 @@ try {
     return
 }
 
-# --- 2. Setup Export Directory ---
+# Setup export directory
 $LocalTemp = "C:\UHDC\Logs"
 if (-not (Test-Path $LocalTemp)) {
     New-Item -ItemType Directory -Path $LocalTemp -Force | Out-Null
@@ -86,12 +86,12 @@ $Timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
 $ExportPath = "$LocalTemp\EventLogs_$Target_$Timestamp.csv"
 
 try {
-    # --- 3. Query Event Logs ---
+    # Query event logs
     if ([string]::IsNullOrWhiteSpace($Keyword)) {
 
         Wait-TrainingStep `
-            -Desc "STEP 1: QUERY CRITICAL & ERROR LOGS`n`nWHEN TO USE THIS:`nUse this when a user reports unexpected reboots (BSODs), system hangs, or general instability, but doesn't have a specific error code.`n`nWHAT IT DOES:`nWe are using 'Invoke-Command' to run 'Get-WinEvent' directly on the target's CPU. We filter specifically for Level 1 (Critical) and Level 2 (Error) events, pulling the 50 most recent occurrences, and returning them over the network.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), expand 'Windows Logs', select 'System', click 'Filter Current Log' on the right pane, and check the boxes for 'Critical' and 'Error'." `
-            -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-WinEvent -FilterHashtable @{LogName='System','Application'; Level=1,2} -MaxEvents 50 }"
+            -Desc "STEP 1: QUERY CRITICAL & ERROR LOGS`n`nWHEN TO USE THIS:`nUse this when a user reports unexpected reboots (BSODs), system hangs, or general instability, but doesn't have a specific error code.`n`nWHAT IT DOES:`nWhile this script uses PowerShell under the hood to format the CSV, you can pull this data natively using PsExec and the Windows Event Utility ('wevtutil'). We query the System log, format the output as text, and filter for Level 1 (Critical) and Level 2 (Error).`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), expand 'Windows Logs', select 'System', click 'Filter Current Log' on the right pane, and check the boxes for 'Critical' and 'Error'." `
+            -Code "psexec.exe \\$Target -s wevtutil qe System /c:50 /f:text /q:`"*[System[(Level=1 or Level=2)]]`""
 
         Write-Host "  > [1/2] Pulling last 50 Critical/Error logs from System & Application..."
 
@@ -107,8 +107,8 @@ try {
     } else {
 
         Wait-TrainingStep `
-            -Desc "STEP 1: DEEP SCAN FOR KEYWORD`n`nWHEN TO USE THIS:`nUse this when troubleshooting a specific failing application (e.g., 'Outlook', 'Teams') or a specific error code provided by the user.`n`nWHAT IT DOES:`nIn PowerShell 5.1, pulling 10,000 events over the network and filtering them locally will freeze the console. Instead, we use 'Invoke-Command' to force the target PC to pull the 10,000 events, filter them locally using 'Where-Object', and only send the matching results back to us.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), select the 'Application' log, click 'Find...' on the right pane, type your keyword, and click 'Find Next' repeatedly." `
-            -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { Get-WinEvent -LogName 'System','Application' -MaxEvents 10000 | Where-Object { `$_.Message -match `$using:Keyword -or `$_.ProviderName -match `$using:Keyword } }"
+            -Desc "STEP 1: DEEP SCAN FOR KEYWORD`n`nWHEN TO USE THIS:`nUse this when troubleshooting a specific failing application (e.g., 'Outlook', 'Teams') or a specific error code provided by the user.`n`nWHAT IT DOES:`nWe query the last 10,000 events and filter them for your specific keyword. Doing this natively via command line involves pulling the text logs with 'wevtutil' and piping them into 'findstr'.`n`nIN-PERSON EQUIVALENT:`nOpen Event Viewer (eventvwr.msc), select the 'Application' log, click 'Find...' on the right pane, type your keyword, and click 'Find Next' repeatedly." `
+            -Code "psexec.exe \\$Target -s cmd /c `"wevtutil qe Application /c:10000 /f:text | findstr /i '$Keyword'`""
 
         Write-Host "  > [1/2] Deep searching last 10,000 events for keyword: '$Keyword'..."
         Write-Host "    (Offloading query to target CPU... Please wait...)"
@@ -120,12 +120,12 @@ try {
     }
 
     if ($null -ne $logs -and $logs.Count -gt 0) {
-        Write-Host "  [UHDC SUCCESS] Found $($logs.Count) matching logs."
+        Write-Host "  [UHDC] Success: Found $($logs.Count) matching logs."
 
-        # --- 4. Export and Display ---
+        # Export and display
         Wait-TrainingStep `
-            -Desc "STEP 2: EXPORT AND ANALYZE`n`nWHEN TO USE THIS:`nEvent logs contain massive blocks of text that are difficult to read in a standard console window. Exporting them to a spreadsheet allows for easy sorting, filtering, and sharing with higher-tier support teams.`n`nWHAT IT DOES:`nWe are selecting the most relevant properties (Time, ID, Level, Provider, and Message) and exporting them to a local CSV file. We then automatically open File Explorer to highlight the new file for immediate review.`n`nIN-PERSON EQUIVALENT:`nIn Event Viewer, right-click the filtered log view and select 'Save Filtered Log File As...', save it as a CSV to the Desktop, and open it in Excel." `
-            -Code "`$logs | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, LogName, Message | Export-Csv -Path '$ExportPath' -NoTypeInformation`nStart-Process explorer.exe -ArgumentList `"/select,\`"$ExportPath\`"`""
+            -Desc "STEP 2: EXPORT AND ANALYZE`n`nWHEN TO USE THIS:`nEvent logs contain massive blocks of text that are difficult to read in a standard console window. Exporting them to a spreadsheet allows for easy sorting, filtering, and sharing with higher-tier support teams.`n`nWHAT IT DOES:`nWe take the structured data we gathered and export it to a local CSV file. We then automatically open File Explorer to highlight the new file for immediate review.`n`nIN-PERSON EQUIVALENT:`nIn Event Viewer, right-click the filtered log view and select 'Save Filtered Log File As...', save it as a CSV to the Desktop, and open it in Excel." `
+            -Code "start explorer.exe /select,`"$ExportPath`""
 
         Write-Host "  > [2/2] Exporting results to CSV..."
         $logs | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, LogName, Message |
@@ -148,7 +148,7 @@ try {
             Write-Host "  [+] ... plus $($logs.Count - 15) more hidden from console. Open the CSV to view them all!" -ForegroundColor Yellow
         }
 
-        # --- Audit Log ---
+        # Audit log
         if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
             $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
             if (Test-Path $AuditHelper) {
@@ -161,5 +161,5 @@ try {
         Write-Host "  [UHDC] [i] No matching event logs found."
     }
 } catch {
-    Write-Host "  [UHDC] [!] ERROR querying Event Logs: $($_.Exception.Message)"
+    Write-Host "  [UHDC] [!] Error querying event logs: $($_.Exception.Message)"
 }

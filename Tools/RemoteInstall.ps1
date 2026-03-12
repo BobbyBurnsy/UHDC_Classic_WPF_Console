@@ -17,7 +17,7 @@ param(
     [string]$ThemeB64
 )
 
-# --- Training Mode Helper ---
+# Training mode helper
 function Wait-TrainingStep {
     param([string]$Desc, [string]$Code)
     if ($null -ne $SyncHash) {
@@ -35,12 +35,12 @@ function Wait-TrainingStep {
         }
 
         if (-not $SyncHash.StepResult) {
-            throw "Execution aborted by user during Training Mode."
+            throw "Execution aborted by user during training mode."
         }
     }
 }
 
-# --- Load Configuration ---
+# Load configuration
 if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
     try {
         $ScriptDir = Split-Path -Path $MyInvocation.MyCommand.Path
@@ -59,7 +59,7 @@ if ([string]::IsNullOrWhiteSpace($SharedRoot)) {
 
 if ([string]::IsNullOrWhiteSpace($Target)) { return }
 
-# --- Theme Engine Integration ---
+# Theme engine integration
 $ActiveColors = @{
     BG_Main = "#1E1E1E"; BG_Sec  = "#111111"; BG_Con  = "#0C0C0C"
     BG_Btn  = "#2D2D30"; Acc_Pri = "#00A2ED"; Acc_Sec = "#00FF00"
@@ -81,10 +81,10 @@ if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
 }
 
 Write-Host "========================================"
-Write-Host " [UHDC] REMOTE SILENT INSTALLER: $Target"
+Write-Host " [UHDC] Remote silent installer: $Target"
 Write-Host "========================================"
 
-# --- 1. Fast Ping Check ---
+# Fast ping check
 $pingSender = New-Object System.Net.NetworkInformation.Ping
 try {
     if ($pingSender.Send($Target, 1000).Status -ne "Success") {
@@ -98,7 +98,7 @@ try {
     return
 }
 
-# --- 2. Setup Paths & Library Functions ---
+# Setup paths & library functions
 $LibraryFile = Join-Path -Path $SharedRoot -ChildPath "Core\SoftwareLibrary.json"
 
 function Load-Lib {
@@ -127,13 +127,13 @@ function Save-Lib {
         }
         Set-Content -Path $LibraryFile -Value $jsonOutput -Force
     } catch {
-        Write-Host " [UHDC] [!] Failed to save Software Library." -ForegroundColor Red
+        Write-Host " [UHDC] [!] Failed to save software library." -ForegroundColor Red
     }
 }
 
 Add-Type -AssemblyName PresentationFramework
 
-# --- Custom Themed Input Box Function ---
+# Custom themed input box function
 function Show-ThemedInputBox {
     param([string]$Title, [string]$Prompt, [string]$DefaultText = "")
 
@@ -176,7 +176,7 @@ function Show-ThemedInputBox {
     return $null
 }
 
-# --- 3. Main Menu Loop ---
+# Main menu loop
 $installer = $null
 
 while ($true) {
@@ -186,9 +186,9 @@ while ($true) {
     foreach ($app in $lib) {
         $MenuOptions += [PSCustomObject]@{ Action = "INSTALL"; Name = $app.Name; Path = $app.Path; Args = $app.Args; ID = $app.ID }
     }
-    $MenuOptions += [PSCustomObject]@{ Action = "CUSTOM"; Name = "[*] Custom One-Off Install"; Path = "---"; Args = "---"; ID = "" }
-    $MenuOptions += [PSCustomObject]@{ Action = "ADD";    Name = "[+] Add New App to Library"; Path = "---"; Args = "---"; ID = "" }
-    $MenuOptions += [PSCustomObject]@{ Action = "DELETE"; Name = "[-] Delete App from Library";Path = "---"; Args = "---"; ID = "" }
+    $MenuOptions += [PSCustomObject]@{ Action = "CUSTOM"; Name = "[*] Custom one-off install"; Path = "---"; Args = "---"; ID = "" }
+    $MenuOptions += [PSCustomObject]@{ Action = "ADD";    Name = "[+] Add new app to library"; Path = "---"; Args = "---"; ID = "" }
+    $MenuOptions += [PSCustomObject]@{ Action = "DELETE"; Name = "[-] Delete app from library";Path = "---"; Args = "---"; ID = "" }
 
     [string]$MenuXAML = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -241,16 +241,16 @@ while ($true) {
         $Selection = $AppList.SelectedItem
 
         if ($Selection.Action -eq "ADD") {
-            $n = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter Display Name (e.g., Google Chrome):"
+            $n = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter display name (e.g., Google Chrome):"
             if (-not $n) { continue }
-            $p = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter UNC Path to Installer:" -DefaultText "\\server\share\installer.exe"
+            $p = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter UNC path to installer:" -DefaultText "\\server\share\installer.exe"
             if (-not $p) { continue }
-            $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter Silent Switches (e.g., /S /q):" -DefaultText "/S"
+            $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter silent switches (e.g., /S /q):" -DefaultText "/S"
 
             $newID = if ($lib.Count -gt 0) { ([int]($lib | Select-Object -ExpandProperty ID | Measure-Object -Maximum).Maximum) + 1 } else { 1 }
             $lib += [PSCustomObject]@{ID=$newID; Name=$n.Trim(); Path=$p.Trim(); Args=$a.Trim()}
             Save-Lib $lib
-            Write-Host " [UHDC] [+] Added '$n' to Library."
+            Write-Host " [UHDC] [+] Added '$n' to library."
             continue 
         }
         elseif ($Selection.Action -eq "DELETE") {
@@ -274,14 +274,14 @@ while ($true) {
                 $delSel = $DelList.SelectedItem
                 $lib = $lib | Where-Object { $_.ID -ne $delSel.ID }
                 Save-Lib $lib
-                Write-Host " [UHDC] [-] Removed '$($delSel.Name)' from Library."
+                Write-Host " [UHDC] [-] Removed '$($delSel.Name)' from library."
             }
             continue 
         }
         elseif ($Selection.Action -eq "CUSTOM") {
-            $path = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter UNC Path to Installer:" -DefaultText "\\server\share\installer.exe"
+            $path = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter UNC path to installer:" -DefaultText "\\server\share\installer.exe"
             if (-not $path) { continue }
-            $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter Silent Switches (e.g., /S /q):"
+            $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter silent switches (e.g., /S /q):"
             $installer = [PSCustomObject]@{Name="Custom App"; Path=$path.Trim(); Args=$args.Trim()}
             break 
         }
@@ -296,9 +296,9 @@ while ($true) {
     }
 }
 
-# --- 4. Execute Installation ---
+# Execute installation
 if ($installer) {
-    Write-Host "`n [UHDC] [!] Deploying $($installer.Name) to $Target..."
+    Write-Host "`n [UHDC] [i] Deploying $($installer.Name) to $Target..."
     Write-Host "      Path: $($installer.Path)"
     Write-Host "      Args: $($installer.Args)"
 
@@ -307,14 +307,14 @@ if ($installer) {
     if (Test-Path $psExecPath) {
         try {
             Wait-TrainingStep `
-                -Desc "STEP 1: SILENT REMOTE INSTALLATION`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Google Chrome, Adobe Reader, or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nWe are using PsExec to connect to the target PC as the 'SYSTEM' account. We then execute the installer directly from the network share using 'silent' command-line switches (like /S or /qn). This bypasses UAC prompts and hides the installation wizard from the user.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open File Explorer, navigate to the network share, double-click the installer, type in your admin credentials when prompted by UAC, and click 'Next' through the installation wizard." `
+                -Desc "STEP 1: SILENT REMOTE INSTALLATION`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Google Chrome, Adobe Reader, or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nWe use PsExec to connect to the target PC as the 'SYSTEM' account. We then execute the installer directly from the network share using 'silent' command-line switches (like /S or /qn). This bypasses UAC prompts and hides the installation wizard from the user.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open File Explorer, navigate to the network share, double-click the installer, type in your admin credentials when prompted by UAC, and click 'Next' through the installation wizard." `
                 -Code "psexec.exe \\$Target -s `"$($installer.Path)`" $($installer.Args)"
 
             Write-Host "  > [UHDC] Installing in background... (Please wait)"
 
             Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s `"$($installer.Path)`" $($installer.Args)" -Wait -NoNewWindow
 
-            Write-Host " [UHDC SUCCESS] Deployment command finished."
+            Write-Host " [UHDC] Success: Deployment command finished."
 
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
@@ -323,10 +323,10 @@ if ($installer) {
                 }
             }
         } catch {
-            Write-Host " [UHDC] [!] ERROR: Execution failed. $($_.Exception.Message)"
+            Write-Host " [UHDC] [!] Error: Execution failed. $($_.Exception.Message)"
         }
     } else {
-        Write-Host " [UHDC] [!] ERROR: psexec.exe not found at $psExecPath"
+        Write-Host " [UHDC] [!] Error: psexec.exe not found at $psExecPath"
     }
 }
 
