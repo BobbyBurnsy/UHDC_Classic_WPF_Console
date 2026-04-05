@@ -1777,24 +1777,30 @@ $BtnNetSend.Add_Click({
 })
 
 $BtnAddMOTD.Add_Click({
-    # Updated nomenclature to reflect Service Desk Advanced
-    $txt = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the global announcement text:", "New Service Desk Advanced MOTD", "")
+    # Service Desk Advanced Nomenclature
+    $txt = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the global announcement text:", "Service Desk Advanced - New MOTD", "")
 
     if (-not [string]::IsNullOrWhiteSpace($txt)) {
         $MOTDFile = Join-Path -Path $SharedRoot -ChildPath "MOTD.json"
 
-        # Enterprise Safeguard: Utilize a strongly typed generic list to prevent PSObject op_Addition failures
-        $motdList = New-Object System.Collections.Generic.List[System.Object]
+        # Enterprise Safeguard: Use ArrayList to completely avoid += (op_Addition) operators
+        $motdList = New-Object System.Collections.ArrayList
 
-        # Safely handle 0 items (File missing or empty)
+        # Safely handle file reading
         if (Test-Path $MOTDFile) {
             $rawContent = Get-Content $MOTDFile -Raw
             if (-not [string]::IsNullOrWhiteSpace($rawContent)) {
                 $parsed = $rawContent | ConvertFrom-Json
+
                 if ($null -ne $parsed) {
-                    # Safely iterate and add to our generic list, bypassing PS 5.1 unwrapping quirks
-                    foreach ($item in @($parsed)) {
-                        $motdList.Add($item)
+                    # Strict type-checking to prevent PS 5.1 scalar unwrapping
+                    if ($parsed -is [array]) {
+                        foreach ($item in $parsed) {
+                            [void]$motdList.Add($item)
+                        }
+                    } else {
+                        # It's a single object, add it directly
+                        [void]$motdList.Add($parsed)
                     }
                 }
             }
@@ -1803,8 +1809,8 @@ $BtnAddMOTD.Add_Click({
         # Construct the new message payload
         $newMsg = [PSCustomObject]@{ Text = $txt; Timestamp = (Get-Date).ToString("MM/dd HH:mm") }
 
-        # Safely append using the .NET method
-        $motdList.Add($newMsg)
+        # Safely append using the .NET method (No += used here)
+        [void]$motdList.Add($newMsg)
 
         # Convert back to a standard array for JSON serialization
         $finalArray = $motdList.ToArray()
@@ -1831,20 +1837,28 @@ $BtnDelMOTD.Add_Click({
     $parsed = $rawContent | ConvertFrom-Json
     if ($null -eq $parsed) { return }
 
-    # Force array context for the GridView
-    [array]$allMOTDs = @($parsed)
+    # Enterprise Safeguard: Use ArrayList to safely stage data for the GridView
+    $displayList = New-Object System.Collections.ArrayList
+    if ($parsed -is [array]) {
+        foreach ($item in $parsed) {
+            [void]$displayList.Add($item)
+        }
+    } else {
+        # It's a single object, add it directly
+        [void]$displayList.Add($parsed)
+    }
 
-    # Updated nomenclature to reflect Service Desk Advanced
-    $MotdToDelete = $allMOTDs | Out-GridView -Title "Service Desk Advanced - Select announcement to delete" -PassThru
+    # Service Desk Advanced Nomenclature
+    $MotdToDelete = $displayList.ToArray() | Out-GridView -Title "Service Desk Advanced - Select announcement to delete" -PassThru
 
     if ($MotdToDelete) {
-        # Enterprise Safeguard: Utilize a strongly typed generic list for safe rebuilding
-        $motdList = New-Object System.Collections.Generic.List[System.Object]
+        # Enterprise Safeguard: Use ArrayList to rebuild the list without the deleted item
+        $motdList = New-Object System.Collections.ArrayList
 
-        foreach ($item in $allMOTDs) {
+        foreach ($item in $displayList) {
             # Match by Timestamp and Text to ensure we drop the correct one
             if ($item.Timestamp -ne $MotdToDelete.Timestamp -or $item.Text -ne $MotdToDelete.Text) {
-                $motdList.Add($item)
+                [void]$motdList.Add($item)
             }
         }
 
