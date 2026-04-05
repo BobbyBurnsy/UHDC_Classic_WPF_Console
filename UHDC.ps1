@@ -1778,32 +1778,63 @@ $BtnNetSend.Add_Click({
 
 $BtnAddMOTD.Add_Click({
     $txt = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the global announcement text:", "New MOTD", "")
-    if ($txt) {
+    if (-not [string]::IsNullOrWhiteSpace($txt)) {
         $MOTDFile = Join-Path -Path $SharedRoot -ChildPath "MOTD.json"
-        $allMOTDs = if (Test-Path $MOTDFile) { Get-Content $MOTDFile -Raw | ConvertFrom-Json } else { @() }
-        $allMOTDs = if ($allMOTDs -is [System.Array]) { $allMOTDs } else { @($allMOTDs) }
+
+        [array]$allMOTDs = @()
+
+        # Safely handle 0 items (File missing or empty)
+        if (Test-Path $MOTDFile) {
+            $rawContent = Get-Content $MOTDFile -Raw
+            if (-not [string]::IsNullOrWhiteSpace($rawContent)) {
+                $parsed = $rawContent | ConvertFrom-Json
+                if ($null -ne $parsed) {
+                    $allMOTDs = @($parsed)
+                }
+            }
+        }
 
         $newMsg = [PSCustomObject]@{ Text = $txt; Timestamp = (Get-Date).ToString("MM/dd HH:mm") }
-        ConvertTo-Json -InputObject @($allMOTDs + $newMsg) -Depth 2 | Set-Content $MOTDFile -Force
+        $allMOTDs += $newMsg
 
+        # Enterprise Safeguard: Force JSON array format for PS 5.1 single-item unwrapping bug
+        $jsonOutput = ConvertTo-Json -InputObject $allMOTDs -Depth 2
+        if ($allMOTDs.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+            $jsonOutput = "[$jsonOutput]"
+        }
+
+        Set-Content -Path $MOTDFile -Value $jsonOutput -Force
         Write-AuditLog -Action "Added MOTD: $txt" -Target "Global"
     }
 })
 
 $BtnDelMOTD.Add_Click({
     $MOTDFile = Join-Path -Path $SharedRoot -ChildPath "MOTD.json"
-    if (-not (Test-Path $MOTDFile)) { return }
 
-    $allMOTDs = Get-Content $MOTDFile -Raw | ConvertFrom-Json
-    if ($null -eq $allMOTDs) { return }
-    $allMOTDs = if ($allMOTDs -is [System.Array]) { $allMOTDs } else { @($allMOTDs) }
+    # Safely handle 0 items
+    if (-not (Test-Path $MOTDFile)) { return }
+    $rawContent = Get-Content $MOTDFile -Raw
+    if ([string]::IsNullOrWhiteSpace($rawContent)) { return }
+
+    $parsed = $rawContent | ConvertFrom-Json
+    if ($null -eq $parsed) { return }
+
+    [array]$allMOTDs = @($parsed)
 
     $MotdToDelete = $allMOTDs | Out-GridView -Title "Select announcement to delete" -PassThru
     if ($MotdToDelete) {
-        $newList = @($allMOTDs | Where-Object { $_.Timestamp -ne $MotdToDelete.Timestamp -or $_.Text -ne $MotdToDelete.Text })
+        # Filter out the deleted item
+        [array]$newList = $allMOTDs | Where-Object { $_.Timestamp -ne $MotdToDelete.Timestamp -or $_.Text -ne $MotdToDelete.Text }
+
         if ($newList.Count -gt 0) {
-            ConvertTo-Json -InputObject $newList -Depth 2 | Set-Content $MOTDFile -Force
+            # Enterprise Safeguard: Force JSON array format for PS 5.1 single-item unwrapping bug
+            $jsonOutput = ConvertTo-Json -InputObject $newList -Depth 2
+            if ($newList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+                $jsonOutput = "[$jsonOutput]"
+            }
+            Set-Content -Path $MOTDFile -Value $jsonOutput -Force
         } else {
+            # If 0 items remain, cleanly remove the file to prevent parsing errors later
             Remove-Item $MOTDFile -Force
         }
 
