@@ -1777,11 +1777,14 @@ $BtnNetSend.Add_Click({
 })
 
 $BtnAddMOTD.Add_Click({
-    $txt = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the global announcement text:", "New MOTD", "")
+    # Updated nomenclature to reflect Service Desk Advanced
+    $txt = [Microsoft.VisualBasic.Interaction]::InputBox("Enter the global announcement text:", "New Service Desk Advanced MOTD", "")
+
     if (-not [string]::IsNullOrWhiteSpace($txt)) {
         $MOTDFile = Join-Path -Path $SharedRoot -ChildPath "MOTD.json"
 
-        [array]$allMOTDs = @()
+        # Enterprise Safeguard: Utilize a strongly typed generic list to prevent PSObject op_Addition failures
+        $motdList = New-Object System.Collections.Generic.List[System.Object]
 
         # Safely handle 0 items (File missing or empty)
         if (Test-Path $MOTDFile) {
@@ -1789,17 +1792,26 @@ $BtnAddMOTD.Add_Click({
             if (-not [string]::IsNullOrWhiteSpace($rawContent)) {
                 $parsed = $rawContent | ConvertFrom-Json
                 if ($null -ne $parsed) {
-                    $allMOTDs = @($parsed)
+                    # Safely iterate and add to our generic list, bypassing PS 5.1 unwrapping quirks
+                    foreach ($item in @($parsed)) {
+                        $motdList.Add($item)
+                    }
                 }
             }
         }
 
+        # Construct the new message payload
         $newMsg = [PSCustomObject]@{ Text = $txt; Timestamp = (Get-Date).ToString("MM/dd HH:mm") }
-        $allMOTDs += $newMsg
+
+        # Safely append using the .NET method
+        $motdList.Add($newMsg)
+
+        # Convert back to a standard array for JSON serialization
+        $finalArray = $motdList.ToArray()
 
         # Enterprise Safeguard: Force JSON array format for PS 5.1 single-item unwrapping bug
-        $jsonOutput = ConvertTo-Json -InputObject $allMOTDs -Depth 2
-        if ($allMOTDs.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+        $jsonOutput = ConvertTo-Json -InputObject $finalArray -Depth 2
+        if ($finalArray.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
             $jsonOutput = "[$jsonOutput]"
         }
 
@@ -1819,17 +1831,29 @@ $BtnDelMOTD.Add_Click({
     $parsed = $rawContent | ConvertFrom-Json
     if ($null -eq $parsed) { return }
 
+    # Force array context for the GridView
     [array]$allMOTDs = @($parsed)
 
-    $MotdToDelete = $allMOTDs | Out-GridView -Title "Select announcement to delete" -PassThru
-    if ($MotdToDelete) {
-        # Filter out the deleted item
-        [array]$newList = $allMOTDs | Where-Object { $_.Timestamp -ne $MotdToDelete.Timestamp -or $_.Text -ne $MotdToDelete.Text }
+    # Updated nomenclature to reflect Service Desk Advanced
+    $MotdToDelete = $allMOTDs | Out-GridView -Title "Service Desk Advanced - Select announcement to delete" -PassThru
 
-        if ($newList.Count -gt 0) {
+    if ($MotdToDelete) {
+        # Enterprise Safeguard: Utilize a strongly typed generic list for safe rebuilding
+        $motdList = New-Object System.Collections.Generic.List[System.Object]
+
+        foreach ($item in $allMOTDs) {
+            # Match by Timestamp and Text to ensure we drop the correct one
+            if ($item.Timestamp -ne $MotdToDelete.Timestamp -or $item.Text -ne $MotdToDelete.Text) {
+                $motdList.Add($item)
+            }
+        }
+
+        if ($motdList.Count -gt 0) {
+            $finalArray = $motdList.ToArray()
+            $jsonOutput = ConvertTo-Json -InputObject $finalArray -Depth 2
+
             # Enterprise Safeguard: Force JSON array format for PS 5.1 single-item unwrapping bug
-            $jsonOutput = ConvertTo-Json -InputObject $newList -Depth 2
-            if ($newList.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
+            if ($finalArray.Count -eq 1 -and $jsonOutput -notmatch "^\s*\[") {
                 $jsonOutput = "[$jsonOutput]"
             }
             Set-Content -Path $MOTDFile -Value $jsonOutput -Force
