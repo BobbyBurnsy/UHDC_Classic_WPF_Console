@@ -2,8 +2,11 @@
 # Place this script in the ROOT folder (e.g., \\Server\Share\UHDC\)
 
 # Auto-elevate to Administrator
+param([string]$CallerSID = "")
+
 if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    $mySID = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -CallerSID `"$mySID`"" -Verb RunAs
     Exit
 }
 
