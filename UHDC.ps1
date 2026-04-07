@@ -574,7 +574,7 @@ $BtnAddMOTD = $Form.FindName("BtnAddMOTD")
 $BtnDelMOTD = $Form.FindName("BtnDelMOTD")
 
 # Role-based access control via SIDs
-$currentUserSID = if ($CallerSID) { $CallerSID } else { ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value }
+$currentUserSID = if ($CallerUsername) { $CallerUsername } else { $env:USERNAME }
 
 if (-not ($MasterAdmins -contains $currentUserSID)) {
     $BtnGlobalMap.Visibility = "Collapsed"
