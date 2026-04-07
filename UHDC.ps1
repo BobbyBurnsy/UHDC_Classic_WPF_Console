@@ -4,11 +4,16 @@
 # Auto-elevate to Administrator
 param([string]$CallerSID = "")
 
+param([string]$CallerSID = "", [string]$CallerUsername = "")
+
 if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $mySID = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-    Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -CallerSID `"$mySID`"" -Verb RunAs
+    $mySID      = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $myUsername = $env:USERNAME
+    Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -CallerSID `"$mySID`" -CallerUsername `"$myUsername`"" -Verb RunAs
     Exit
 }
+
+if ($CallerUsername) { $env:USERNAME = $CallerUsername }
 
 # Environment setup and configuration
 Add-Type -AssemblyName PresentationFramework
