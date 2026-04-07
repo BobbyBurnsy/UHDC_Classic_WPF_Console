@@ -2,8 +2,6 @@
 # Place this script in the ROOT folder (e.g., \\Server\Share\UHDC\)
 
 # Auto-elevate to Administrator
-param([string]$CallerSID = "")
-
 param([string]$CallerSID = "", [string]$CallerUsername = "")
 
 if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
