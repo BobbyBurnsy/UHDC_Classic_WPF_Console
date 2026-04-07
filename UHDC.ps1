@@ -2,12 +2,11 @@
 # Place this script in the ROOT folder (e.g., \\Server\Share\UHDC\)
 
 # Auto-elevate to Administrator
-param([string]$CallerSID = "", [string]$CallerUsername = "")
+param([string]$CallerUsername = "")
 
 if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $mySID      = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
     $myUsername = $env:USERNAME
-    Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -CallerSID `"$mySID`" -CallerUsername `"$myUsername`"" -Verb RunAs
+    Start-Process PowerShell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -CallerUsername `"$myUsername`"" -Verb RunAs
     Exit
 }
 
@@ -28,18 +27,18 @@ if ($MyInvocation.MyCommand.Path) {
 
 $ConfigFile = Join-Path -Path $AppDir -ChildPath "config.json"
 
-# First-run setup (using SIDs)
+# First-run setup
 if (-not (Test-Path $ConfigFile)) {
     $currentUser = if ($CallerUsername) { $CallerUsername } else { $env:USERNAME }
     $Template = [ordered]@{
         OrganizationName  = "Acme Corp"
         SharedNetworkRoot = "\\YOUR-SERVER\YourShare\UHDC"
-        MasterAdmins      = @($currentUser,)
+        MasterAdmins      = @($currentUser)
         Trainees          = @($currentUser)
     }
     $Template | ConvertTo-Json -Depth 3 | Out-File $ConfigFile -Force
 
-    [System.Windows.MessageBox]::Show("First run detected!`n`nA configuration file has been generated at:`n$ConfigFile`n`nYour personal SID has been automatically added to the MasterAdmins list. Please open the config file and enter your IT network paths.", "Setup Required", "OK", "Information")
+    [System.Windows.MessageBox]::Show("First run detected!`n`nA configuration file has been generated at:`n$ConfigFile`n`nYour personal username ($currentUser) has been automatically added to the MasterAdmins list. Please open the config file and enter your IT network paths.", "Service Desk Advanced - Setup", "OK", "Information")
     Exit
 }
 
@@ -573,7 +572,7 @@ $BtnNetSend = $Form.FindName("BtnNetSend")
 $BtnAddMOTD = $Form.FindName("BtnAddMOTD")
 $BtnDelMOTD = $Form.FindName("BtnDelMOTD")
 
-# Role-based access control via SIDs
+# Role-based access control
 $currentUser = if ($CallerUsername) { $CallerUsername } else { $env:USERNAME }
 
 if (-not ($MasterAdmins -contains $currentUser)) {
@@ -583,13 +582,13 @@ if (-not ($MasterAdmins -contains $currentUser)) {
 
 # TEMP DEBUG - remove after testing
 [System.Windows.MessageBox]::Show(
-    "CallerSID param: $CallerSID`n`nResolved SID: $currentUserSID`n`nMasterAdmins list:`n$($MasterAdmins -join "`n")",
-    "RBAC Debug",
+    "Resolved Username: $currentUser`n`nMasterAdmins list:`n$($MasterAdmins -join "`n")",
+    "Service Desk Advanced - RBAC Debug",
     "OK",
     "Information"
 )
 
-if ($Trainees -contains $currentUserSID) {
+if ($Trainees -contains $currentUser) {
     $CbTrainingMode.IsChecked = $true
 }
 
