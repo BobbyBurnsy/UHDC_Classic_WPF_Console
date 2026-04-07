@@ -32,7 +32,7 @@ $ConfigFile = Join-Path -Path $AppDir -ChildPath "config.json"
 
 # First-run setup (using SIDs)
 if (-not (Test-Path $ConfigFile)) {
-    $currentUserSID = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $currentUserSID = if ($CallerSID) { $CallerSID } else { ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value }
     $Template = [ordered]@{
         OrganizationName  = "Acme Corp"
         SharedNetworkRoot = "\\YOUR-SERVER\YourShare\UHDC"
