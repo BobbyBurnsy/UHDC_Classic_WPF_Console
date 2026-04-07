@@ -30,12 +30,12 @@ $ConfigFile = Join-Path -Path $AppDir -ChildPath "config.json"
 
 # First-run setup (using SIDs)
 if (-not (Test-Path $ConfigFile)) {
-    $currentUserSID = if ($CallerUsername) { $CallerUsername } else { $env:USERNAME }
+    $currentUser = if ($CallerUsername) { $CallerUsername } else { $env:USERNAME }
     $Template = [ordered]@{
         OrganizationName  = "Acme Corp"
         SharedNetworkRoot = "\\YOUR-SERVER\YourShare\UHDC"
-        MasterAdmins      = @($currentUserSID, "S-1-5-21-0000000000-0000000000-0000000000-1002")
-        Trainees          = @("S-1-5-21-0000000000-0000000000-0000000000-1003")
+        MasterAdmins      = @($currentUser,)
+        Trainees          = @($currentUser)
     }
     $Template | ConvertTo-Json -Depth 3 | Out-File $ConfigFile -Force
 
