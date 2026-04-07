@@ -656,23 +656,13 @@ function Update-MainXpDisplay {
 Update-MainXpDisplay
 
 # Audit logging
-function Mask-PII ([string]$InputString) {
-    if ([string]::IsNullOrWhiteSpace($InputString)) { return "N/A" }
-    if ($InputString -notmatch "\." -and $InputString.Length -gt 3) {
-        $first = $InputString.Substring(0,1)
-        $last = $InputString.Substring($InputString.Length - 1, 1)
-        return "$first***$last"
-    }
-    return $InputString
-}
-
 function Write-AuditLog {
     param([string]$Action, [string]$Target)
     try {
         $LogEntry = [PSCustomObject]@{
             Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
             Tech      = $global:TechNickname
-            Target    = if ($Target) { Mask-PII $Target } else { "N/A" }
+            Target    = if ($Target) { $Target } else { "N/A" }
             Action    = $Action
         }
         $LogEntry | Export-Csv -Path $AuditLogPath -Append -NoTypeInformation -Force
