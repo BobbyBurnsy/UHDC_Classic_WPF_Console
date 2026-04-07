@@ -607,7 +607,7 @@ function Write-AuditLog {
     try {
         $LogEntry = [PSCustomObject]@{
             Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-            Tech      = $global:TechNickname
+            Tech = $env:USERNAME
             Target    = if ($Target) { $Target } else { "N/A" }
             Action    = $Action
         }
