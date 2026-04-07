@@ -1401,29 +1401,17 @@ $BtnRemLoc.Add_Click({
     $allData = Get-Content $HistoryFile -Raw | ConvertFrom-Json
     if ($allData -isnot [System.Array]) { $allData = @($allData) }
 
-    $userPCs = @()
-    foreach ($entry in $allData) {
-        try {
-            $aes = [System.Security.Cryptography.Aes]::Create()
-            $aes.Key = $UHDCKey; $aes.IV = $UHDCIV
-            $decryptor = $aes.CreateDecryptor()
-
-            $bytes = [Convert]::FromBase64String($entry.User)
-            $decUser = [System.Text.Encoding]::UTF8.GetString($decryptor.TransformFinalBlock($bytes, 0, $bytes.Length))
-
-            if ($decUser -eq $TargetUser) {
-                $bytesPC = [Convert]::FromBase64String($entry.Computer)
-                $decPC = [System.Text.Encoding]::UTF8.GetString($decryptor.TransformFinalBlock($bytesPC, 0, $bytesPC.Length))
-
-                $userPCs += [PSCustomObject]@{
-                    User = $decUser
-                    Computer = $decPC
-                    LastSeen = $entry.LastSeen
-                    Source = $entry.Source
-                }
-            }
-        } catch {}
+$userPCs = @()
+foreach ($entry in $allData) {
+    if ($entry.User -eq $TargetUser) {
+        $userPCs += [PSCustomObject]@{
+            User     = $entry.User
+            Computer = $entry.Computer
+            LastSeen = $entry.LastSeen
+            Source   = $entry.Source
+        }
     }
+}
 
     if ($userPCs.Count -eq 0) {
         [System.Windows.MessageBox]::Show("No computer history found for '$TargetUser'.", "Empty History", "OK", "Information")
