@@ -1894,7 +1894,7 @@ $PresencePS = [powershell]::Create()
 
 [void]$PresencePS.AddArgument($PresenceDir)
 [void]$PresencePS.AddArgument($SharedRoot)
-[void]$PresencePS.AddArgument($global:TechNickname)
+[void]$PresencePS.AddArgument($env:USERNAME)
 [void]$PresencePS.AddArgument($Form.Dispatcher)
 [void]$PresencePS.AddArgument($OnlineUsersConsole)
 [void]$PresencePS.AddArgument($MotdScrollText)
