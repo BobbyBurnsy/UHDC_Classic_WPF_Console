@@ -581,14 +581,6 @@ if (-not ($MasterAdmins -contains $currentUserSID)) {
     $BtnDeploy.Visibility = "Collapsed"
 }
 
-# TEMP DEBUG - remove after testing
-[System.Windows.MessageBox]::Show(
-    "CallerSID param: $CallerSID`n`nResolved SID: $currentUserSID`n`nMasterAdmins list:`n$($MasterAdmins -join "`n")",
-    "RBAC Debug",
-    "OK",
-    "Information"
-)
-
 if ($Trainees -contains $currentUserSID) {
     $CbTrainingMode.IsChecked = $true
 }
