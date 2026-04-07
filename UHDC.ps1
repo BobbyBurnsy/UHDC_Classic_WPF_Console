@@ -153,60 +153,6 @@ function Update-ThemeB64 {
 }
 Update-ThemeB64
 
-# Security: Nickname prompt for pseudonymization
-$global:TechNickname = "Unknown"
-
-if ($global:UserPrefs.ContainsKey($env:USERNAME) -and $null -ne $global:UserPrefs[$env:USERNAME].Nickname) {
-    $global:TechNickname = $global:UserPrefs[$env:USERNAME].Nickname
-} else {
-    [string]$NickXAML = @"
-    <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Title="UHDC Security Setup" SizeToContent="Height" Width="480" Background="$($ActiveColors.BG_Main)" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
-        <StackPanel Margin="20">
-            <TextBlock Text="Welcome to the UHDC" Foreground="$($ActiveColors.Acc_Pri)" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
-            <TextBlock Text="To protect your privacy and prevent PII leakage in our audit logs, please provide a Nickname or your First Name." Foreground="White" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,10"/>
-            <TextBlock Text="SECURITY WARNING: Do NOT enter your Active Directory username or full name." Foreground="#FF4444" FontSize="12" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,0,15"/>
-
-            <TextBox Name="InputBox" Background="$($ActiveColors.BG_Sec)" Foreground="$($ActiveColors.Acc_Pri)" FontSize="16" Height="30" Padding="4" BorderBrush="#555"/>
-
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
-                <Button Name="BtnOK" Content="Save Profile" Width="120" Height="35" Background="$($ActiveColors.Acc_Pri)" Foreground="$($ActiveColors.BG_Main)" Cursor="Hand" BorderThickness="0" FontWeight="Bold" IsDefault="True">
-                    <Button.Resources>
-                        <Style TargetType="Border"><Setter Property="CornerRadius" Value="4"/></Style>
-                    </Button.Resources>
-                </Button>
-            </StackPanel>
-        </StackPanel>
-    </Window>
-"@
-    $StringReader = New-Object System.IO.StringReader $NickXAML
-    $XmlReader = [System.Xml.XmlReader]::Create($StringReader)
-    $NickWin = [System.Windows.Markup.XamlReader]::Load($XmlReader)
-
-    $InputBox = $NickWin.FindName("InputBox")
-    $BtnOK = $NickWin.FindName("BtnOK")
-
-    $NickWin.Add_Loaded({ $InputBox.Focus() })
-    $BtnOK.Add_Click({ $NickWin.DialogResult = $true })
-
-    if ($NickWin.ShowDialog() -eq $true -and -not [string]::IsNullOrWhiteSpace($InputBox.Text)) {
-        $global:TechNickname = $InputBox.Text.Trim()
-    } else {
-        $global:TechNickname = "Tech_$((Get-Random -Maximum 9999))"
-    }
-
-    if (-not $global:UserPrefs.ContainsKey($env:USERNAME)) {
-        $global:UserPrefs[$env:USERNAME] = [PSCustomObject]@{ ThemeName = "PNW (Default)" }
-    }
-    $global:UserPrefs[$env:USERNAME] | Add-Member -MemberType NoteProperty -Name "Nickname" -Value $global:TechNickname -Force
-
-    try {
-        $exportObj = New-Object PSObject
-        foreach ($key in $global:UserPrefs.Keys) { $exportObj | Add-Member -MemberType NoteProperty -Name $key -Value $global:UserPrefs[$key] -Force }
-        $exportObj | ConvertTo-Json -Depth 3 | Set-Content $UsersFile -Force
-    } catch {}
-}
-
 # Initialize async runspace pool
 $RunspacePool = [runspacefactory]::CreateRunspacePool(1, 15)
 $RunspacePool.ApartmentState = "STA"
