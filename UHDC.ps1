@@ -1376,7 +1376,6 @@ $BtnAddLoc.Add_Click({
     $ADOutputConsole.ScrollToEnd()
 })
 
-# Decrypt history for GUI grid
 $BtnRemLoc.Add_Click({
     $TargetUser = $ADInput.Text
     if ([string]::IsNullOrWhiteSpace($TargetUser)) {
