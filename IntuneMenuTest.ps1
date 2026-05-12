@@ -85,6 +85,10 @@ if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
     } catch {}
 }
 
+# Load required .NET assemblies
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName System.Windows.Forms
+
 # Graph API authentication
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -105,8 +109,6 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
         return
     }
 }
-
-Add-Type -AssemblyName PresentationFramework
 
 # UI definition (XAML)
 [string]$XAML = @"
