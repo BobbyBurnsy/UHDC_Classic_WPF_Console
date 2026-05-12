@@ -372,7 +372,6 @@ $Form.Add_Loaded({
             [System.Windows.Forms.Application]::DoEvents()
 
             $SafeUser = $TargetUser -replace "'","''"
-            # Removed -Property to ensure default properties (including UPN) are fully populated
             $users = @(Get-MgUser -Filter "userPrincipalName eq '$SafeUser' or mail eq '$SafeUser' or mailNickname eq '$SafeUser'" -ErrorAction Stop)
 
             if ($users.Count -gt 0) {
@@ -393,7 +392,10 @@ $Form.Add_Loaded({
                     $script:ResolvedUser = $null
                 } else {
                     $HeaderString += " [$($script:ResolvedUser.DisplayName)]"
-                    $userDevices = @(Get-MgDeviceManagementManagedDevice -Filter "userId eq '$($script:ResolvedUser.Id)'" -ErrorAction Stop)
+
+                    # FIX: Use Get-MgUserManagedDevice instead of filtering all devices by userId
+                    $userDevices = @(Get-MgUserManagedDevice -UserId $script:ResolvedUser.Id -ErrorAction Stop)
+
                     if ($userDevices.Count -gt 0) { 
                         $RawDeviceList += $userDevices 
                     }
