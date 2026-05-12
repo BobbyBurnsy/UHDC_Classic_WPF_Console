@@ -393,7 +393,6 @@ $Form.Add_Loaded({
                 } else {
                     $HeaderString += " [$($script:ResolvedUser.DisplayName)]"
 
-                    # FIX: Use Get-MgUserManagedDevice instead of filtering all devices by userId
                     $userDevices = @(Get-MgUserManagedDevice -UserId $script:ResolvedUser.Id -ErrorAction Stop)
 
                     if ($userDevices.Count -gt 0) { 
@@ -408,7 +407,8 @@ $Form.Add_Loaded({
         $HeaderTitle.Text = $HeaderString
 
         if ($RawDeviceList.Count -gt 0) {
-            $script:GlobalDevices = $RawDeviceList | Select-Object -Unique -Property Id | Sort-Object deviceName
+            # FIX: Use Sort-Object -Unique instead of Select-Object -Unique to preserve the full device object
+            $script:GlobalDevices = $RawDeviceList | Sort-Object -Property Id -Unique | Sort-Object deviceName
 
             foreach ($dev in $script:GlobalDevices) {
                 $status = if ($dev.ComplianceState -eq "compliant") { "[OK]" } else { "[X]" }
