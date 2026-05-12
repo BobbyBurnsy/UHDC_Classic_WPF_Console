@@ -272,6 +272,7 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
             <Button Name="BtnBitLocker" Content="Get BitLocker Key" Width="130" Height="30" Margin="5" Style="{StaticResource ActionBtn}" Visibility="Collapsed"/>
             <Button Name="BtnLAPS" Content="Get LAPS Pass" Width="130" Height="30" Margin="5" Style="{StaticResource WarningBtn}" Visibility="Collapsed"/>
             <Button Name="BtnUnlock" Content="Remove Passcode" Width="130" Height="30" Margin="5" Style="{StaticResource WarningBtn}" Visibility="Collapsed"/>
+            <Button Name="BtnRemoteLock" Content="Remote Lock" Width="130" Height="30" Margin="5" Style="{StaticResource WarningBtn}" Visibility="Collapsed"/>
             <Button Name="BtnWipe" Content="Remote Wipe" Width="130" Height="30" Margin="5" Style="{StaticResource DangerBtn}" Visibility="Collapsed"/>
             <Button Name="BtnSync" Content="Force Sync" Width="130" Height="30" Margin="5" Style="{StaticResource StdBtn}" Visibility="Collapsed"/>
             <Button Name="BtnReboot" Content="Reboot Device" Width="130" Height="30" Margin="5" Style="{StaticResource DangerBtn}" Visibility="Collapsed"/>
@@ -312,16 +313,17 @@ $DeviceList  = $Form.FindName("DeviceList")
 $ActionPanel = $Form.FindName("ActionPanel")
 $OutputText  = $Form.FindName("OutputText")
 
-$BtnBitLocker = $Form.FindName("BtnBitLocker")
-$BtnLAPS      = $Form.FindName("BtnLAPS")
-$BtnUnlock    = $Form.FindName("BtnUnlock")
-$BtnWipe      = $Form.FindName("BtnWipe")
-$BtnSync      = $Form.FindName("BtnSync")
-$BtnReboot    = $Form.FindName("BtnReboot")
-$BtnMFA       = $Form.FindName("BtnMFA")
-$BtnClearMFA  = $Form.FindName("BtnClearMFA")
-$InputPhone   = $Form.FindName("InputPhone")
-$BtnAddPhone  = $Form.FindName("BtnAddPhone")
+$BtnBitLocker  = $Form.FindName("BtnBitLocker")
+$BtnLAPS       = $Form.FindName("BtnLAPS")
+$BtnUnlock     = $Form.FindName("BtnUnlock")
+$BtnRemoteLock = $Form.FindName("BtnRemoteLock")
+$BtnWipe       = $Form.FindName("BtnWipe")
+$BtnSync       = $Form.FindName("BtnSync")
+$BtnReboot     = $Form.FindName("BtnReboot")
+$BtnMFA        = $Form.FindName("BtnMFA")
+$BtnClearMFA   = $Form.FindName("BtnClearMFA")
+$InputPhone    = $Form.FindName("InputPhone")
+$BtnAddPhone   = $Form.FindName("BtnAddPhone")
 
 # Explicitly scope these so the button click handlers can access them
 $script:ResolvedUser = $null
@@ -407,8 +409,8 @@ $Form.Add_Loaded({
         $HeaderTitle.Text = $HeaderString
 
         if ($RawDeviceList.Count -gt 0) {
-            # FIX: Use Sort-Object -Unique instead of Select-Object -Unique to preserve the full device object
-            $script:GlobalDevices = $RawDeviceList | Sort-Object -Property Id -Unique | Sort-Object deviceName
+            # FIX: Wrap in @() to guarantee it remains an array even if only 1 device is found
+            $script:GlobalDevices = @($RawDeviceList | Sort-Object -Property Id -Unique | Sort-Object deviceName)
 
             foreach ($dev in $script:GlobalDevices) {
                 $status = if ($dev.ComplianceState -eq "compliant") { "[OK]" } else { "[X]" }
@@ -429,25 +431,29 @@ $DeviceList.Add_SelectionChanged({
         $OutputText.Text = "Ready..."
         $selectedDev = $script:GlobalDevices[$DeviceList.SelectedIndex]
 
-        $BtnBitLocker.Visibility = "Collapsed"
-        $BtnLAPS.Visibility      = "Collapsed"
-        $BtnUnlock.Visibility    = "Collapsed"
-        $BtnWipe.Visibility      = "Collapsed"
-        $BtnSync.Visibility      = "Collapsed"
-        $BtnReboot.Visibility    = "Collapsed"
+        # Reset all buttons to hidden
+        $BtnBitLocker.Visibility  = "Collapsed"
+        $BtnLAPS.Visibility       = "Collapsed"
+        $BtnUnlock.Visibility     = "Collapsed"
+        $BtnRemoteLock.Visibility = "Collapsed"
+        $BtnWipe.Visibility       = "Collapsed"
+        $BtnSync.Visibility       = "Collapsed"
+        $BtnReboot.Visibility     = "Collapsed"
 
         if ($selectedDev) {
-            $BtnSync.Visibility = "Visible"
-            $BtnWipe.Visibility = "Visible"
-
+            # Windows Devices
             if ($selectedDev.OperatingSystem -match "Windows") {
                 $BtnBitLocker.Visibility = "Visible"
                 $BtnLAPS.Visibility      = "Visible"
                 $BtnReboot.Visibility    = "Visible"
             }
-
-            if ($selectedDev.OperatingSystem -match "iOS|Android|iPadOS") {
-                $BtnUnlock.Visibility = "Visible"
+            # Mobile Devices (iOS, Android, iPadOS, Mac)
+            else {
+                $BtnUnlock.Visibility     = "Visible"
+                $BtnRemoteLock.Visibility = "Visible"
+                $BtnSync.Visibility       = "Visible"
+                $BtnReboot.Visibility     = "Visible"
+                $BtnWipe.Visibility       = "Visible"
             }
         }
     }
@@ -491,8 +497,33 @@ $BtnUnlock.Add_Click({
         -Code "Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId `$dev.Id"
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
-        Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId $dev.Id
-        $OutputText.Text = "UHDC: Mobile unlock command dispatched."
+        $OutputText.Text = "UHDC: Sending unlock command..."
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId $dev.Id -ErrorAction Stop
+            $OutputText.Text = "UHDC: Mobile unlock command dispatched."
+        } catch {
+            $OutputText.Text = "Unlock failed: $($_.Exception.Message)"
+        }
+    }
+})
+
+$BtnRemoteLock.Add_Click({
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
+    Wait-TrainingStep `
+        -Desc "STEP X: REMOTE LOCK`n`nWHEN TO USE THIS:`nUse this when a user misplaces their mobile device but isn't sure if it's permanently lost yet.`n`nWHAT IT DOES:`nWe send an MDM command to instantly lock the device screen, requiring the PIN/Biometrics to unlock it.`n`nIN-PERSON EQUIVALENT:`nPressing the power/sleep button on the side of the phone." `
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/remoteLock`""
+
+    if ([System.Windows.MessageBox]::Show("Send remote lock command to $($dev.DeviceName)?", "UHDC Confirm", "YesNo") -eq "Yes") {
+        $OutputText.Text = "UHDC: Sending lock command..."
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            # Using Invoke-MgGraphRequest directly to avoid cmdlet versioning issues across different Microsoft.Graph module versions
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/remoteLock" -ErrorAction Stop
+            $OutputText.Text = "UHDC: Remote lock command dispatched."
+        } catch {
+            $OutputText.Text = "Lock failed: $($_.Exception.Message)"
+        }
     }
 })
 
@@ -585,15 +616,27 @@ $BtnAddPhone.Add_Click({
 
 $BtnSync.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
-    Invoke-MgSyncDeviceManagementManagedDevice -ManagedDeviceId $dev.Id
-    $OutputText.Text = "UHDC: Sync command dispatched."
+    $OutputText.Text = "UHDC: Sending sync command..."
+    [System.Windows.Forms.Application]::DoEvents()
+    try {
+        Invoke-MgSyncDeviceManagementManagedDevice -ManagedDeviceId $dev.Id -ErrorAction Stop
+        $OutputText.Text = "UHDC: Sync command dispatched."
+    } catch {
+        $OutputText.Text = "Sync failed: $($_.Exception.Message)"
+    }
 })
 
 $BtnReboot.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     if ([System.Windows.MessageBox]::Show("Send reboot command to $($dev.DeviceName)?", "UHDC Confirm", "YesNo") -eq "Yes") {
-        Invoke-MgRebootDeviceManagementManagedDevice -ManagedDeviceId $dev.Id
-        $OutputText.Text = "UHDC: Reboot command dispatched."
+        $OutputText.Text = "UHDC: Sending reboot command..."
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            Invoke-MgRebootDeviceManagementManagedDevice -ManagedDeviceId $dev.Id -ErrorAction Stop
+            $OutputText.Text = "UHDC: Reboot command dispatched."
+        } catch {
+            $OutputText.Text = "Reboot failed: $($_.Exception.Message)"
+        }
     }
 })
 
