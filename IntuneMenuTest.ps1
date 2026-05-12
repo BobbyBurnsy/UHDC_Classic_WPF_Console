@@ -492,28 +492,34 @@ $BtnBitLocker.Add_Click({
 $BtnLAPS.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
-        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We attempt the standard beta endpoint first, and fall back to the v1.0 directory endpoint if needed.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/beta/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We attempt the standard v1.0 directory endpoint first, and fall back to the beta endpoint if needed.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'`" -Headers @{ `"ConsistencyLevel`" = `"eventual`" }"
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
 
+    $aadId = $dev.AzureAdDeviceId
+    if ([string]::IsNullOrWhiteSpace($aadId)) {
+        $OutputText.Text = "LAPS failed: This device does not have an Azure AD Device ID (Not AAD Joined)."
+        return
+    }
+
     $lapsData = $null
     $lapsError = ""
 
-    # Attempt 1: Standard Beta Endpoint
+    # Attempt 1: v1.0 Directory Endpoint (Requires ConsistencyLevel header)
     try {
-        $uri = "https://graph.microsoft.com/beta/deviceLocalCredentials?`$filter=deviceId eq '$($dev.AzureAdDeviceId)'"
-        $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '$aadId'"
+        $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -Headers @{ "ConsistencyLevel" = "eventual" } -ErrorAction Stop
     } catch {
         $lapsError = $_.Exception.Message
     }
 
-    # Attempt 2: Fallback to v1.0 Directory Endpoint (Requires ConsistencyLevel header)
+    # Attempt 2: Fallback to Beta Endpoint
     if (-not $lapsData) {
         try {
-            $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '$($dev.AzureAdDeviceId)'"
-            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -Headers @{ "ConsistencyLevel" = "eventual" } -ErrorAction Stop
+            $uri = "https://graph.microsoft.com/beta/deviceLocalCredentials?`$filter=deviceId eq '$aadId'"
+            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
         } catch {
             $lapsError = $_.Exception.Message
         }
@@ -535,18 +541,21 @@ $BtnLAPS.Add_Click({
 $BtnUnlock.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
-        -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device. This endpoint strictly requires an empty JSON body.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
-        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`" -Body `"{}`" -ContentType `"application/json`""
+        -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            # Explicitly passing an empty JSON string and ContentType to satisfy the API's strict body requirement
-            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -Body "{}" -ContentType "application/json" -ErrorAction Stop
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -ErrorAction Stop
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
-            $OutputText.Text = "Unlock failed: $($_.Exception.Message)"
+            if ($_.Exception.Message -match "BadRequest") {
+                $OutputText.Text = "Unlock failed: Bad Request. (Device is likely BYOD/User-Enrolled, which blocks passcode removal)."
+            } else {
+                $OutputText.Text = "Unlock failed: $($_.Exception.Message)"
+            }
         }
     }
 })
