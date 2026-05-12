@@ -508,8 +508,8 @@ $BtnBitLocker.Add_Click({
 $BtnLAPS.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
-        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We attempt the native cmdlet first, then fall back to raw API calls if the module is outdated.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Get-MgDirectoryDeviceLocalCredential -Filter `"deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We use the direct object lookup method to bypass filter restrictions.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/`$(`$dev.AzureAdDeviceId)?`$select=credentials`""
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
@@ -520,43 +520,57 @@ $BtnLAPS.Add_Click({
         return
     }
 
+    $lapsData = $null
     $lapsError = ""
-    $pwd = $null
 
-    # Attempt 1: Native Cmdlet (if available in the user's module version)
-    if (-not $pwd) {
-        try {
-            $creds = @(Get-MgDirectoryDeviceLocalCredential -Filter "deviceId eq '$aadId'" -ErrorAction Stop)
-            if ($creds.Count -gt 0) { 
-                $pwd = $creds[0].Credentials[0].Password 
-            }
-        } catch { $lapsError += "[Cmdlet: $(Get-GraphError $_)] " }
+    # Attempt 1: v1.0 Directory Endpoint (Direct ID Lookup, no filter required)
+    try {
+        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/$aadId?`$select=credentials"
+        $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+    } catch {
+        $lapsError += "[v1.0: $(Get-GraphError $_)] "
     }
 
-    # Attempt 2: v1.0 Graph API (Strict URL Encoding)
-    if (-not $pwd) {
+    # Attempt 2: Beta Directory Endpoint
+    if (-not $lapsData) {
         try {
-            $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?%24filter=deviceId%20eq%20'$aadId'"
-            $res = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
-            if ($res.value -and $res.value.Count -gt 0) { 
-                $pwd = $res.value[0].credentials[0].password 
-            }
-        } catch { $lapsError += "[v1.0: $(Get-GraphError $_)] " }
+            $uri = "https://graph.microsoft.com/beta/directory/deviceLocalCredentials/$aadId?`$select=credentials"
+            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+        } catch {
+            $lapsError += "[Beta Dir: $(Get-GraphError $_)] "
+        }
     }
 
-    # Attempt 3: Beta Graph API (Strict URL Encoding)
-    if (-not $pwd) {
+    # Attempt 3: Old Beta Endpoint
+    if (-not $lapsData) {
         try {
-            $uri = "https://graph.microsoft.com/beta/deviceLocalCredentials?%24filter=deviceId%20eq%20'$aadId'"
-            $res = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
-            if ($res.value -and $res.value.Count -gt 0) { 
-                $pwd = $res.value[0].credentials[0].password 
-            }
-        } catch { $lapsError += "[Beta: $(Get-GraphError $_)]" }
+            $uri = "https://graph.microsoft.com/beta/deviceLocalCredentials/$aadId?`$select=credentials"
+            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+        } catch {
+            $lapsError += "[Beta Old: $(Get-GraphError $_)]"
+        }
     }
 
-    if ($pwd) {
-        $OutputText.Text = "CLOUD LAPS: $pwd"
+    if ($lapsData -and $lapsData.credentials) {
+        $creds = $lapsData.credentials
+        $credObj = if ($creds -is [array]) { $creds[0] } else { $creds }
+
+        $pwd = $null
+
+        # Microsoft recently started Base64-encoding LAPS passwords in the API response
+        if ($credObj.password) { 
+            $pwd = $credObj.password 
+        } elseif ($credObj.passwordBase64) { 
+            try {
+                $pwd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($credObj.passwordBase64))
+            } catch { $pwd = "Error decoding Base64 password." }
+        }
+
+        if ($pwd) {
+            $OutputText.Text = "CLOUD LAPS: $pwd"
+        } else {
+            $OutputText.Text = "LAPS data found, but password property was empty."
+        }
     } else {
         $OutputText.Text = "LAPS retrieval failed: $lapsError"
     }
