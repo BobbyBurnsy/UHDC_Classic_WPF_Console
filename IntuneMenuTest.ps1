@@ -221,16 +221,16 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#FFD700"/>
-                                <Setter Property="Foreground" Value="#FFD700"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="#B366FF"/>
+                                <Setter Property="Foreground" Value="#B366FF"/>
                                 <Setter TargetName="border" Property="Effect">
                                     <Setter.Value>
-                                        <DropShadowEffect Color="#FFD700" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                        <DropShadowEffect Color="#B366FF" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                     </Setter.Value>
                                 </Setter>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#FFD700"/>
+                                <Setter TargetName="border" Property="Background" Value="#B366FF"/>
                                 <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -509,7 +509,7 @@ $BtnLAPS.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We use the direct object lookup method to bypass filter restrictions.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/`$(`$dev.AzureAdDeviceId)?`$select=credentials`""
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/`$(`$dev.AzureAdDeviceId)?`%24select=credentials`""
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
@@ -520,59 +520,36 @@ $BtnLAPS.Add_Click({
         return
     }
 
-    $lapsData = $null
-    $lapsError = ""
-
-    # Attempt 1: v1.0 Directory Endpoint (Direct ID Lookup, no filter required)
     try {
-        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/$aadId?`$select=credentials"
+        # DIRECT LOOKUP: No $filter used. We just append the Azure AD Device ID directly to the endpoint.
+        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/$aadId?%24select=credentials"
         $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
-    } catch {
-        $lapsError += "[v1.0: $(Get-GraphError $_)] "
-    }
 
-    # Attempt 2: Beta Directory Endpoint
-    if (-not $lapsData) {
-        try {
-            $uri = "https://graph.microsoft.com/beta/directory/deviceLocalCredentials/$aadId?`$select=credentials"
-            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
-        } catch {
-            $lapsError += "[Beta Dir: $(Get-GraphError $_)] "
-        }
-    }
+        if ($lapsData -and $lapsData.credentials) {
+            $creds = $lapsData.credentials
+            $credObj = if ($creds -is [array]) { $creds[0] } else { $creds }
 
-    # Attempt 3: Old Beta Endpoint
-    if (-not $lapsData) {
-        try {
-            $uri = "https://graph.microsoft.com/beta/deviceLocalCredentials/$aadId?`$select=credentials"
-            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
-        } catch {
-            $lapsError += "[Beta Old: $(Get-GraphError $_)]"
-        }
-    }
+            $pwd = $null
 
-    if ($lapsData -and $lapsData.credentials) {
-        $creds = $lapsData.credentials
-        $credObj = if ($creds -is [array]) { $creds[0] } else { $creds }
+            # Microsoft recently started Base64-encoding LAPS passwords in the API response
+            if ($credObj.password) { 
+                $pwd = $credObj.password 
+            } elseif ($credObj.passwordBase64) { 
+                try {
+                    $pwd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($credObj.passwordBase64))
+                } catch { $pwd = "Error decoding Base64 password." }
+            }
 
-        $pwd = $null
-
-        # Microsoft recently started Base64-encoding LAPS passwords in the API response
-        if ($credObj.password) { 
-            $pwd = $credObj.password 
-        } elseif ($credObj.passwordBase64) { 
-            try {
-                $pwd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($credObj.passwordBase64))
-            } catch { $pwd = "Error decoding Base64 password." }
-        }
-
-        if ($pwd) {
-            $OutputText.Text = "CLOUD LAPS: $pwd"
+            if ($pwd) {
+                $OutputText.Text = "CLOUD LAPS: $pwd"
+            } else {
+                $OutputText.Text = "LAPS data found, but password property was empty."
+            }
         } else {
-            $OutputText.Text = "LAPS data found, but password property was empty."
+            $OutputText.Text = "No Cloud LAPS data available for this device."
         }
-    } else {
-        $OutputText.Text = "LAPS retrieval failed: $lapsError"
+    } catch {
+        $OutputText.Text = "LAPS retrieval failed: $(Get-GraphError $_)"
     }
 })
 
@@ -589,7 +566,12 @@ $BtnUnlock.Add_Click({
             Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -ErrorAction Stop
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
-            $OutputText.Text = "Unlock failed: $(Get-GraphError $_)"
+            $err = Get-GraphError $_
+            if ($err -match "BadRequest" -or $err -match "Not Supported") {
+                $OutputText.Text = "Unlock failed: Intune rejected the command. (Possible reasons: No passcode is currently set, device is offline, or Apple is blocking it because the device is not 'Supervised')."
+            } else {
+                $OutputText.Text = "Unlock failed: $err"
+            }
         }
     }
 })
