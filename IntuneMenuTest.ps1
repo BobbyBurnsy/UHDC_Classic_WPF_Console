@@ -58,11 +58,15 @@ try {
     }
 } catch { }
 
+# Resolve Technician's Domain
 $TechUPN = whoami /upn 2>$null
 if (-not $TechUPN) {
     try { $TechUPN = (Get-ADUser $env:USERNAME -Properties UserPrincipalName).UserPrincipalName } catch {}
 }
 $TechDomain = if ($TechUPN -match "@(.*)$") { $matches[1] } else { "" }
+
+# Extract base domain (e.g., from it.contoso.com -> contoso.com) to prevent false positives on subdomains
+$TechDomainBase = if ($TechDomain -match "([^\.]+\.[^\.]+)$") { $matches[1] } else { $TechDomain }
 
 # Theme engine integration
 $ActiveColors = @{
@@ -339,16 +343,22 @@ $Form.Add_Loaded({
             [System.Windows.Forms.Application]::DoEvents()
 
             $SafeComp = $TargetComputer -replace "'","''"
-            # Changed to ErrorAction Stop so the Catch block can grab the actual API error
             $deviceMatch = Get-MgDeviceManagementManagedDevice -Filter "deviceName eq '$SafeComp'" -ErrorAction Stop
 
             if ($deviceMatch) {
-                # Ensure it's an array to handle multiple matches safely
                 $devices = if ($deviceMatch -is [System.Array]) { $deviceMatch } else { @($deviceMatch) }
 
                 foreach ($dev in $devices) {
-                    if ($TechDomain -and $dev.UserPrincipalName -and $dev.UserPrincipalName -notmatch [regex]::Escape($TechDomain)) {
-                        [System.Windows.MessageBox]::Show("Access Denied: The requested device ($($dev.DeviceName)) belongs to a different agency/domain ($($dev.UserPrincipalName)).", "Cross-Agency Block", "OK", "Error")
+                    $upn = $dev.UserPrincipalName
+                    $domainMatch = $false
+
+                    if (-not $TechDomainBase) { $domainMatch = $true }
+                    elseif ([string]::IsNullOrWhiteSpace($upn)) { $domainMatch = $true } # Fail open if API doesn't return UPN
+                    elseif ($upn -notmatch "@") { $domainMatch = $true } # Local/Malformed account bypass
+                    elseif ($upn -match [regex]::Escape($TechDomainBase)) { $domainMatch = $true }
+
+                    if (-not $domainMatch) {
+                        [System.Windows.MessageBox]::Show("Access Denied: The requested device ($($dev.DeviceName)) is assigned to a different agency/domain ($upn).", "Cross-Agency Block", "OK", "Error")
                     } else {
                         $RawDeviceList += $dev
                         $HeaderString += " [Device Found]"
@@ -362,21 +372,30 @@ $Form.Add_Loaded({
             [System.Windows.Forms.Application]::DoEvents()
 
             $SafeUser = $TargetUser -replace "'","''"
-            # Simplified filter to prevent HTTP 400 Bad Request on advanced queries without ConsistencyLevel
-            $users = Get-MgUser -Filter "userPrincipalName eq '$SafeUser' or mail eq '$SafeUser' or mailNickname eq '$SafeUser'" -ErrorAction Stop
+            # Removed -Property to ensure default properties (including UPN) are fully populated
+            $users = @(Get-MgUser -Filter "userPrincipalName eq '$SafeUser' or mail eq '$SafeUser' or mailNickname eq '$SafeUser'" -ErrorAction Stop)
 
-            if ($users -and $users.Count -gt 0) {
+            if ($users.Count -gt 0) {
                 $script:ResolvedUser = $users[0]
+                $upn = $script:ResolvedUser.UserPrincipalName
+                $mail = $script:ResolvedUser.Mail
 
-                if ($TechDomain -and $script:ResolvedUser.UserPrincipalName -notmatch [regex]::Escape($TechDomain)) {
-                    [System.Windows.MessageBox]::Show("Access Denied: The requested user ($($script:ResolvedUser.UserPrincipalName)) belongs to a different agency/domain.", "Cross-Agency Block", "OK", "Error")
+                $domainMatch = $false
+                if (-not $TechDomainBase) { $domainMatch = $true }
+                elseif ([string]::IsNullOrWhiteSpace($upn) -and [string]::IsNullOrWhiteSpace($mail)) { $domainMatch = $true } # Fail open
+                elseif ($upn -and $upn -match [regex]::Escape($TechDomainBase)) { $domainMatch = $true }
+                elseif ($mail -and $mail -match [regex]::Escape($TechDomainBase)) { $domainMatch = $true }
+                elseif ($upn -and $upn -notmatch "@") { $domainMatch = $true } # Local/Malformed account bypass
+
+                if (-not $domainMatch) {
+                    $displayId = if ($upn) { $upn } else { $script:ResolvedUser.DisplayName }
+                    [System.Windows.MessageBox]::Show("Access Denied: The requested user ($displayId) belongs to a different agency/domain.", "Cross-Agency Block", "OK", "Error")
                     $script:ResolvedUser = $null
                 } else {
                     $HeaderString += " [$($script:ResolvedUser.DisplayName)]"
-                    $userDevices = Get-MgDeviceManagementManagedDevice -Filter "userId eq '$($script:ResolvedUser.Id)'" -ErrorAction Stop
-                    if ($userDevices) { 
-                        $uDevs = if ($userDevices -is [System.Array]) { $userDevices } else { @($userDevices) }
-                        $RawDeviceList += $uDevs 
+                    $userDevices = @(Get-MgDeviceManagementManagedDevice -Filter "userId eq '$($script:ResolvedUser.Id)'" -ErrorAction Stop)
+                    if ($userDevices.Count -gt 0) { 
+                        $RawDeviceList += $userDevices 
                     }
                 }
             } else {
@@ -398,7 +417,6 @@ $Form.Add_Loaded({
             $DeviceList.IsEnabled = $false
         }
     } catch {
-        # Expose the exact API error to the UI
         $HeaderTitle.Text = "API Error: $($_.Exception.Message)"
     }
 })
