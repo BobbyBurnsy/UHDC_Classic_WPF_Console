@@ -44,6 +44,22 @@ function Wait-TrainingStep {
     }
 }
 
+# Deep Error Extractor for Microsoft Graph
+function Get-GraphError {
+    param($ErrorRecord)
+    $msg = $ErrorRecord.Exception.Message
+    try {
+        # Attempt to parse the JSON payload hidden in the error message
+        if ($msg -match '\{.*\}') {
+            $jsonStr = [regex]::Match($msg, '\{.*\}', [System.Text.RegularExpressions.RegexOptions]::Singleline).Value
+            $json = $jsonStr | ConvertFrom-Json
+            if ($json.error.message) { return $json.error.message }
+            if ($json.Message) { return $json.Message }
+        }
+    } catch {}
+    return $msg
+}
+
 # Load configuration and domain filtering
 $OrgName = "IT"
 try {
@@ -420,7 +436,7 @@ $Form.Add_Loaded({
             $DeviceList.IsEnabled = $false
         }
     } catch {
-        $HeaderTitle.Text = "API Error: $($_.Exception.Message)"
+        $HeaderTitle.Text = "API Error: $(Get-GraphError $_)"
     }
 })
 
@@ -485,15 +501,15 @@ $BtnBitLocker.Add_Click({
             $OutputText.Text = "No keys found for this device." 
         }
     } catch { 
-        $OutputText.Text = "BitLocker retrieval failed: $($_.Exception.Message)" 
+        $OutputText.Text = "BitLocker retrieval failed: $(Get-GraphError $_)" 
     }
 })
 
 $BtnLAPS.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
-        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We attempt the standard v1.0 directory endpoint first, and fall back to the beta endpoint if needed.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'`" -Headers @{ `"ConsistencyLevel`" = `"eventual`" }"
+        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We must use the /directory/ endpoint, append `$count=true`, and pass a ConsistencyLevel header.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'&`$count=true`" -Headers @{ `"ConsistencyLevel`" = `"eventual`" }"
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
@@ -507,21 +523,21 @@ $BtnLAPS.Add_Click({
     $lapsData = $null
     $lapsError = ""
 
-    # Attempt 1: v1.0 Directory Endpoint (Requires ConsistencyLevel header)
+    # Attempt 1: v1.0 Directory Endpoint (Requires ConsistencyLevel header and $count=true)
     try {
-        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '$aadId'"
+        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '$aadId'&`$count=true"
         $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -Headers @{ "ConsistencyLevel" = "eventual" } -ErrorAction Stop
     } catch {
-        $lapsError = $_.Exception.Message
+        $lapsError = Get-GraphError $_
     }
 
     # Attempt 2: Fallback to Beta Endpoint
     if (-not $lapsData) {
         try {
-            $uri = "https://graph.microsoft.com/beta/deviceLocalCredentials?`$filter=deviceId eq '$aadId'"
-            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+            $uri = "https://graph.microsoft.com/beta/deviceLocalCredentials?`$filter=deviceId eq '$aadId'&`$count=true"
+            $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -Headers @{ "ConsistencyLevel" = "eventual" } -ErrorAction Stop
         } catch {
-            $lapsError = $_.Exception.Message
+            $lapsError = Get-GraphError $_
         }
     }
 
@@ -551,10 +567,11 @@ $BtnUnlock.Add_Click({
             Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -ErrorAction Stop
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
-            if ($_.Exception.Message -match "BadRequest") {
-                $OutputText.Text = "Unlock failed: Bad Request. (Device is likely BYOD/User-Enrolled, which blocks passcode removal)."
+            $err = Get-GraphError $_
+            if ($err -match "BadRequest" -or $err -match "Not Supported") {
+                $OutputText.Text = "Unlock failed: Apple requires iOS devices to be 'Supervised' (DEP/Apple Business Manager) to remove passcodes remotely. Manually enrolled devices are blocked."
             } else {
-                $OutputText.Text = "Unlock failed: $($_.Exception.Message)"
+                $OutputText.Text = "Unlock failed: $err"
             }
         }
     }
@@ -573,7 +590,7 @@ $BtnRemoteLock.Add_Click({
             Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/remoteLock" -ErrorAction Stop
             $OutputText.Text = "UHDC: Remote lock command dispatched."
         } catch {
-            $OutputText.Text = "Lock failed: $($_.Exception.Message)"
+            $OutputText.Text = "Lock failed: $(Get-GraphError $_)"
         }
     }
 })
@@ -592,7 +609,7 @@ $BtnWipe.Add_Click({
             Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/wipe" -ErrorAction Stop
             $OutputText.Text = "[UHDC] Success: Wipe command dispatched to $($dev.DeviceName)."
         } catch {
-            $OutputText.Text = "Wipe failed: $($_.Exception.Message)"
+            $OutputText.Text = "Wipe failed: $(Get-GraphError $_)"
         }
     }
 })
@@ -615,7 +632,7 @@ $BtnMFA.Add_Click({
             foreach ($m in $methods) { $msg += "- $($m.PhoneType): $($m.PhoneNumber)`n" }
             $OutputText.Text = $msg
         } else { $OutputText.Text = "No MFA phone methods found." }
-    } catch { $OutputText.Text = "Failed to access authentication methods." }
+    } catch { $OutputText.Text = "Failed to access authentication methods: $(Get-GraphError $_)" }
 })
 
 $BtnClearMFA.Add_Click({
@@ -638,7 +655,7 @@ $BtnClearMFA.Add_Click({
                 $cleared++
             }
             $OutputText.Text = "[UHDC] Success: Cleared $cleared MFA methods. User must re-register."
-        } catch { $OutputText.Text = "Failed to clear MFA: $($_.Exception.Message)" }
+        } catch { $OutputText.Text = "Failed to clear MFA: $(Get-GraphError $_)" }
     }
 })
 
@@ -659,7 +676,7 @@ $BtnAddPhone.Add_Click({
             New-MgUserAuthenticationPhoneMethod -UserId $script:ResolvedUser.Id -PhoneType "mobile" -PhoneNumber $newPhone -ErrorAction Stop
             $OutputText.Text = "[UHDC] Success: $newPhone added as primary SMS MFA."
             $InputPhone.Text = ""
-        } catch { $OutputText.Text = "Error: $($_.Exception.Message)" }
+        } catch { $OutputText.Text = "Error: $(Get-GraphError $_)" }
     } else {
         $OutputText.Text = "Error: Use international format (+15550001111)"
     }
@@ -673,7 +690,7 @@ $BtnSync.Add_Click({
         Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/syncDevice" -ErrorAction Stop
         $OutputText.Text = "UHDC: Sync command dispatched."
     } catch {
-        $OutputText.Text = "Sync failed: $($_.Exception.Message)"
+        $OutputText.Text = "Sync failed: $(Get-GraphError $_)"
     }
 })
 
@@ -686,7 +703,7 @@ $BtnReboot.Add_Click({
             Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/rebootNow" -ErrorAction Stop
             $OutputText.Text = "UHDC: Reboot command dispatched."
         } catch {
-            $OutputText.Text = "Reboot failed: $($_.Exception.Message)"
+            $OutputText.Text = "Reboot failed: $(Get-GraphError $_)"
         }
     }
 })
