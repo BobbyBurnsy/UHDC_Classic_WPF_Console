@@ -2,8 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Universally stages ALL packages locally, generates an install.ps1 script on the target,
-# and forces PsExec to wait synchronously while capturing a local transcript log.
+# Universally stages ALL packages locally, verifies byte size, generates an install.ps1 
+# script on the target, and forces PsExec to wait synchronously.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -330,6 +330,7 @@ if ($installer) {
             if (-not (Test-Path $cleanPath)) {
                 throw "Source file cannot be found or accessed: $cleanPath"
             }
+            $sourceSize = (Get-Item $cleanPath).Length
 
             # 2. Setup Staging Variables
             $stagingDir = "\\$Target\c$\Temp\UHDC_Staging"
@@ -340,18 +341,23 @@ if ($installer) {
             # 3. Create Directory and Copy File
             if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
 
-            $fileSizeMB = [math]::Round((Get-Item $cleanPath).Length / 1MB, 2)
+            $fileSizeMB = [math]::Round($sourceSize / 1MB, 2)
             Write-Host "  > [UHDC] Transferring $fileName ($fileSizeMB MB) to target..."
 
             $transferTime = Measure-Command {
                 Copy-Item -Path $cleanPath -Destination $stagingFile -Force -ErrorAction Stop
             }
 
-            # 4. Verify Transfer
+            # 4. Strict Byte-for-Byte Verification
             if (-not (Test-Path $stagingFile)) {
                 throw "Verification failed: The file did not successfully copy to $stagingFile"
             }
-            Write-Host "  > [UHDC] Transfer complete in $($transferTime.TotalSeconds.ToString('0.0')) seconds."
+            $targetSize = (Get-Item $stagingFile).Length
+            if ($sourceSize -ne $targetSize) {
+                throw "Verification failed: Source file is $sourceSize bytes, but transferred file is $targetSize bytes."
+            }
+
+            Write-Host "  > [UHDC] Transfer complete and verified in $($transferTime.TotalSeconds.ToString('0.0')) seconds."
 
             # 5. Build the PowerShell execution payload script
             $argString = if (-not [string]::IsNullOrWhiteSpace($installer.Args)) { $installer.Args } else { "" }
@@ -363,10 +369,13 @@ if ($installer) {
 
                 $scriptContent = @"
 Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
-`$ProgressPreference = 'SilentlyContinue'
 `$ErrorActionPreference = 'Stop'
 try {
     Write-Output "Starting MSIX Provisioning..."
+    Write-Output "Verifying local file size on target..."
+    `$size = [math]::Round((Get-Item "$localTargetFile").Length / 1MB, 2)
+    Write-Output "File size: `$size MB"
+
     Add-AppxProvisionedPackage -Online -PackagePath "$localTargetFile" -SkipLicense $argString | Out-Null
     Write-Output "[SUCCESS] MSIX Provisioned Successfully."
 } catch {
@@ -377,10 +386,13 @@ Stop-Transcript
             } elseif ($isMsi) {
                 $scriptContent = @"
 Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
-`$ProgressPreference = 'SilentlyContinue'
 `$ErrorActionPreference = 'Stop'
 try {
     Write-Output "Starting MSI Installation..."
+    Write-Output "Verifying local file size on target..."
+    `$size = [math]::Round((Get-Item "$localTargetFile").Length / 1MB, 2)
+    Write-Output "File size: `$size MB"
+
     `$proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `\`"$localTargetFile`\`" $argString" -Wait -PassThru -NoNewWindow
     if (`$proc.ExitCode -eq 0 -or `$proc.ExitCode -eq 3010) {
         Write-Output "[SUCCESS] MSI Installed Successfully (Exit Code: `$(`$proc.ExitCode))."
@@ -395,10 +407,13 @@ Stop-Transcript
             } else {
                 $scriptContent = @"
 Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
-`$ProgressPreference = 'SilentlyContinue'
 `$ErrorActionPreference = 'Stop'
 try {
     Write-Output "Starting EXE Installation..."
+    Write-Output "Verifying local file size on target..."
+    `$size = [math]::Round((Get-Item "$localTargetFile").Length / 1MB, 2)
+    Write-Output "File size: `$size MB"
+
     `$proc = Start-Process -FilePath "$localTargetFile" -ArgumentList "$argString" -Wait -PassThru -NoNewWindow
     if (`$proc.ExitCode -eq 0 -or `$proc.ExitCode -eq 3010) {
         Write-Output "[SUCCESS] EXE Installed Successfully (Exit Code: `$(`$proc.ExitCode))."
@@ -424,28 +439,13 @@ Stop-Transcript
             Write-Host "  > [UHDC] Executing installer as SYSTEM... (Please wait)"
 
             # Execute the script via PsExec wrapped in CMD to force synchronous wait
-            $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
+            # Using Start-Process -Wait prevents the RemoteException formatting spam
+            $psexecArgs = "/accepteula \\$Target -s cmd.exe /c `"powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File C:\Temp\UHDC_Staging\install.ps1`""
 
-            $execOutput = & $psExecPath $psexecArgs 2>&1
+            Start-Process -FilePath $psExecPath -ArgumentList $psexecArgs -Wait -NoNewWindow
 
-            foreach ($line in $execOutput) {
-                $strLine = [string]$line
-                # Filter out standard PsExec noise
-                if ($strLine -match "PsExec v" -or $strLine -match "Sysinternals" -or $strLine -match "Copyright" -or $strLine -match "starting on" -or $strLine -match "exited with error code") { continue }
-
-                if (-not [string]::IsNullOrWhiteSpace($strLine)) {
-                    if ($strLine -match "\[ERROR\]") {
-                        Write-Host "    $strLine" -ForegroundColor Red
-                    } elseif ($strLine -match "\[SUCCESS\]") {
-                        Write-Host "    $strLine" -ForegroundColor Green
-                    } else {
-                        Write-Host "    $strLine"
-                    }
-                }
-            }
-
-            Write-Host " [UHDC] Deployment sequence finished."
-            Write-Host " [UHDC] [i] Files left in \\$Target\c$\Temp\UHDC_Staging for inspection." -ForegroundColor Yellow
+            Write-Host "`n [UHDC] Deployment sequence finished."
+            Write-Host " [UHDC] [i] Check \\$Target\c$\Temp\UHDC_Staging\install_log.txt for the exact results." -ForegroundColor Yellow
 
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
