@@ -2,8 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Universally stages ALL packages locally and generates an install.ps1 script on the target.
-# Progress streams are suppressed to prevent CLIXML serialization crashes over PsExec.
+# Universally stages ALL packages locally, generates an install.ps1 script on the target,
+# and forces PsExec to wait synchronously while capturing a local transcript log.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -362,6 +362,7 @@ if ($installer) {
                 $argString = $argString -replace '(?i)^/([Sqx]|qn|quiet|norestart)\s*', ''
 
                 $scriptContent = @"
+Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
 `$ProgressPreference = 'SilentlyContinue'
 `$ErrorActionPreference = 'Stop'
 try {
@@ -371,9 +372,11 @@ try {
 } catch {
     Write-Output "[ERROR] MSIX Install Failed: `$(`$_.Exception.Message)"
 }
+Stop-Transcript
 "@
             } elseif ($isMsi) {
                 $scriptContent = @"
+Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
 `$ProgressPreference = 'SilentlyContinue'
 `$ErrorActionPreference = 'Stop'
 try {
@@ -387,9 +390,11 @@ try {
 } catch {
     Write-Output "[ERROR] MSI Install Failed: `$(`$_.Exception.Message)"
 }
+Stop-Transcript
 "@
             } else {
                 $scriptContent = @"
+Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
 `$ProgressPreference = 'SilentlyContinue'
 `$ErrorActionPreference = 'Stop'
 try {
@@ -403,6 +408,7 @@ try {
 } catch {
     Write-Output "[ERROR] EXE Install Failed: `$(`$_.Exception.Message)"
 }
+Stop-Transcript
 "@
             }
 
@@ -413,12 +419,13 @@ try {
 
             Wait-TrainingStep `
                 -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs an application installed, but they do not have local administrator rights, or you want to install it in the background.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then generate a small 'install.ps1' script and copy it to the target as well. We use PsExec to connect as the 'SYSTEM' account and execute that script. The script suppresses progress bars (which crash PsExec), executes the installer, waits for it to finish, and captures the exit code.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
-                -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -File `"$localScriptPath`""
+                -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s cmd.exe /c powershell.exe -File `"$localScriptPath`""
 
             Write-Host "  > [UHDC] Executing installer as SYSTEM... (Please wait)"
 
-            # Execute the script via PsExec
-            $psexecArgs = @("/accepteula", "\\$Target", "-s", "powershell.exe", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", $localScriptPath)
+            # Execute the script via PsExec wrapped in CMD to force synchronous wait
+            $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
+
             $execOutput = & $psExecPath $psexecArgs 2>&1
 
             foreach ($line in $execOutput) {
