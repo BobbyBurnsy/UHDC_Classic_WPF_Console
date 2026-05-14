@@ -1,6 +1,6 @@
 # Unified Help Desk Console (UHDC) - WPF Edition
 
-**Version:** 9.0 (Classic WPF Architecture)  
+**Version:** 9.5 (Classic WPF Architecture)  
 **Compatibility:** Windows PowerShell 5.1 Native  
 **Author / Lead Engineer:** Bobby Burns  
 
@@ -40,11 +40,15 @@ By utilizing PowerShell Runspaces, the UHDC ensures the GUI remains fluid and re
 * **Interactive Training Mode:** A gamified, step-by-step execution engine. Junior technicians can see the exact PowerShell code being executed, read plain-English explanations of what the code does, and earn XP for completing tasks.
 * **Intune & Entra ID Integration:** A dedicated Intune menu powered by the Microsoft Graph API (enforcing TLS 1.2). Manage BitLocker keys, Cloud LAPS, Remote Wipes, and User MFA methods with strict cross-agency domain filtering.
 * **Smart User Tracking:** Automatically correlates users to their physical PCs using a central `UserHistory.json` database, backed by the `NetworkScan.ps1` intelligence engine.
+* **Advanced Software Deployment:** A robust remote installer that automatically bypasses the "Double-Hop" network block by staging files locally. Supports `.exe`, `.msi`, and modern `.msix/.appx` provisioning. Features three execution contexts:
+    * *SYSTEM:* Machine-wide enterprise deployments.
+    * *Technician:* Delegated credential execution.
+    * *Active User:* Dynamically builds Scheduled Tasks to silently deploy per-user apps (like Canva or Spotify) into the active user's `AppData` folder without needing their password.
 * **Custom Theme Engine:** Personalize your console with built-in themes or create a **Custom** profile (the highest tier of our software license). Features a signature neon glow aesthetic:
     * 🔵 **Blue/Accent:** Standard actions.
     * 🔴 **Red:** Destructive/Danger actions (e.g., Remote Wipe, Force Restart).
     * 🟣 **Purple:** Master Admin tasks (e.g., Global Network Map, Deploy GUI).
-* **PsExec Fallbacks:** Automated firewall bypasses. If WinRM is blocked, tools automatically fall back to using `psexec.exe` to execute native commands locally on the target.
+* **WinRM & PsExec Fallbacks:** A dual-engine execution model. Tools attempt to use native WinRM for cross-subnet reliability and speed. If blocked by a Windows Firewall, they automatically fall back to using `psexec.exe` to execute native commands locally on the target.
 
 ---
 
@@ -69,6 +73,7 @@ To ensure the console operates correctly, the files must be organized on your sh
 │   ├── Helper_UpdateHistory.ps1
 │   ├── Helper_RemoveHistory.ps1
 │   ├── psexec.exe           # Required for firewall fallbacks
+│   ├── SoftwareLibrary.json # Auto-generated deployment library
 │   ├── UserHistory.json     # Auto-generated tracking database
 │   └── users.json           # Auto-generated user preferences/XP
 │
