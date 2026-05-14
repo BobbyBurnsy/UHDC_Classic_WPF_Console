@@ -545,13 +545,18 @@ $BtnUnlock.Add_Click({
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            # FIX: Sending raw REST call with NO body to prevent 400 Bad Request
+            # Added ContentType to ensure strict REST compliance for empty POST requests
             $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode"
-            Invoke-MgGraphRequest -Method POST -Uri $uri -ErrorAction Stop
+            Invoke-MgGraphRequest -Method POST -Uri $uri -ContentType "application/json" -ErrorAction Stop
+
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
-            # FIX: Removed the custom error wrapper so you see the EXACT error Intune is returning
             $OutputText.Text = "Unlock failed: $(Get-GraphError $_)"
+
+            # Add a helpful hint to the console if it fails
+            if ($OutputText.Text -match "BadRequest" -or $OutputText.Text -match "NotSupported") {
+                $OutputText.Text += "`n(Hint: Apple requires 'Supervised' mode to remove passcodes. Android BYOD blocks device-level unlocks.)"
+            }
         }
     }
 })
