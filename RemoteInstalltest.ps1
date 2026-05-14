@@ -2,8 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Automatically detects .msix/.appx packages and routes them through a Base64-encoded 
-# Add-AppxProvisionedPackage command for enterprise-grade deployment.
+# Automatically detects .msix/.appx packages, stages them locally to bypass the 
+# "Double-Hop" SYSTEM network block, and provisions them via Add-AppxProvisionedPackage.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -326,19 +326,34 @@ if ($installer) {
             $isMsix = $cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$'
 
             if ($isMsix) {
-                # Build the DISM provisioning command for modern apps
-                $psCommand = "Add-AppxProvisionedPackage -Online -PackagePath `"$cleanPath`" -SkipLicense"
+                Write-Host "  > [UHDC] Staging MSIX package to target's local drive (Bypassing Double-Hop)..."
 
-                # Append any extra parameters the user provided (ignoring legacy EXE switches)
+                # Setup staging paths
+                $stagingDir = "\\$Target\c$\Temp\UHDC_Staging"
+                $fileName = Split-Path $cleanPath -Leaf
+                $stagingFile = "$stagingDir\$fileName"
+                $localTargetFile = "C:\Temp\UHDC_Staging\$fileName"
+
+                # Copy file over the network using the technician's credentials
+                if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
+                Copy-Item -Path $cleanPath -Destination $stagingFile -Force
+
+                # Build the DISM provisioning command using the LOCAL path
+                $psCommand = "Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
+
+                # Append any extra parameters the user provided
                 if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
                     $psCommand += " $($installer.Args)"
                 }
 
-                Wait-TrainingStep `
-                    -Desc "STEP 1: SILENT MSIX PROVISIONING`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nBecause MSIX packages are installed per-user by default, we use PsExec to launch a hidden PowerShell session as the SYSTEM account. We then execute the 'Add-AppxProvisionedPackage' cmdlet (which hooks into DISM). This provisions the modern app into the Windows image, ensuring that the current user gets it, AND any new user who logs into the PC in the future will automatically get it. To prevent syntax errors with network paths, the command is Base64 encoded before execution.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated PowerShell window and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"\\server\share\app.msix`" -SkipLicense'." `
-                    -Code "psexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
+                # Add cleanup command to delete the staged file after installation
+                $psCommand += "; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
 
-                # Encode the command to prevent cmd.exe from mangling quotes in the UNC path
+                Wait-TrainingStep `
+                    -Desc "STEP 1: STAGE & PROVISION MSIX`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nFirst, we copy the .msix file to the target's C:\Temp folder. This bypasses the 'Double-Hop' issue where the remote SYSTEM account gets blocked from accessing network shares. Then, we use PsExec to launch a hidden PowerShell session as SYSTEM and execute 'Add-AppxProvisionedPackage'. This provisions the app into the Windows image so all current and future users get it. Finally, it deletes the temp file.`n`nIN-PERSON EQUIVALENT:`nCopying the file to the C: drive, opening an elevated PowerShell window, and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"C:\Temp\app.msix`" -SkipLicense'." `
+                    -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
+
+                # Encode the command to prevent cmd.exe from mangling quotes
                 $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
                 $fullArgs = "/accepteula \\$Target -s powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded"
             } else {
@@ -351,7 +366,7 @@ if ($installer) {
             }
 
             Write-Host "  > [UHDC] Installing in background... (Please wait)"
-            Write-Host "  > [i] Note: Ensure 'Domain Computers' has Read access to the network share." -ForegroundColor DarkGray
+            if (-not $isMsix) { Write-Host "  > [i] Note: Ensure 'Domain Computers' has Read access to the network share." -ForegroundColor DarkGray }
 
             Start-Process $psExecPath -ArgumentList $fullArgs -Wait -NoNewWindow
 
