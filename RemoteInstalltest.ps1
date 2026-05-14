@@ -2,7 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Automatically detects .msix/.appx packages and routes them through Add-AppxPackage.
+# Automatically detects .msix/.appx packages, adapts the GUI prompts, and routes 
+# them through a Base64-encoded Add-AppxPackage command for bulletproof execution.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -140,7 +141,7 @@ function Show-ThemedInputBox {
 
     [string]$InputXAML = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Title="$Title" SizeToContent="Height" Width="450" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
+            Title="$Title" SizeToContent="Height" Width="480" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
         <StackPanel Margin="15">
             <TextBlock Text="$Prompt" Foreground="White" FontSize="14" Margin="0,0,0,10" TextWrapping="Wrap"/>
             <TextBox Name="InputBox" Text="$DefaultText" Background="%%BG_SEC%%" Foreground="%%ACC_PRI%%" FontSize="14" Height="28" Padding="4" BorderBrush="#555"/>
@@ -244,9 +245,16 @@ while ($true) {
         if ($Selection.Action -eq "ADD") {
             $n = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter display name (e.g., Google Chrome):"
             if (-not $n) { continue }
+
             $p = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter UNC path to installer:" -DefaultText "\\server\share\installer.exe"
             if (-not $p) { continue }
-            $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter silent switches (e.g., /S /q):" -DefaultText "/S"
+
+            $cleanPath = $p.Trim(" `"'")
+            if ($cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$') {
+                $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPath) or leave blank:`n(Note: -AllUsers is applied automatically)"
+            } else {
+                $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter silent switches (e.g., /S /q):" -DefaultText "/S"
+            }
 
             $newID = if ($lib.Count -gt 0) { ([int]($lib | Select-Object -ExpandProperty ID | Measure-Object -Maximum).Maximum) + 1 } else { 1 }
             $lib += [PSCustomObject]@{ID=$newID; Name=$n.Trim(); Path=$p.Trim(); Args=$a.Trim()}
@@ -282,7 +290,14 @@ while ($true) {
         elseif ($Selection.Action -eq "CUSTOM") {
             $path = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter UNC path to installer:" -DefaultText "\\server\share\installer.exe"
             if (-not $path) { continue }
-            $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter silent switches (e.g., /S /q):"
+
+            $cleanPath = $path.Trim(" `"'")
+            if ($cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$') {
+                $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPath) or leave blank:`n(Note: -AllUsers is applied automatically)"
+            } else {
+                $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter silent switches (e.g., /S /q):"
+            }
+
             $installer = [PSCustomObject]@{Name="Custom App"; Path=$path.Trim(); Args=$args.Trim()}
             break 
         }
@@ -301,31 +316,42 @@ while ($true) {
 if ($installer) {
     Write-Host "`n [UHDC] [i] Deploying $($installer.Name) to $Target..."
     Write-Host "      Path: $($installer.Path)"
-    Write-Host "      Args: $($installer.Args)"
+    if ($installer.Args) { Write-Host "      Args: $($installer.Args)" }
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
     if (Test-Path $psExecPath) {
         try {
-            # Detect if the package is a modern MSIX/APPX format
-            $isMsix = $installer.Path -match '\.(msix|appx|msixbundle|appxbundle)$'
+            $cleanPath = $installer.Path.Trim(" `"'")
+            $isMsix = $cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$'
 
             if ($isMsix) {
-                Wait-TrainingStep `
-                    -Desc "STEP 1: SILENT MSIX DEPLOYMENT`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine.`n`nWHAT IT DOES:`nBecause MSIX packages are installed per-user by default, we use PsExec to launch a hidden PowerShell session as the SYSTEM account. We then execute the 'Add-AppxPackage' cmdlet with the '-AllUsers' flag, which provisions the modern app for everyone on the machine.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated PowerShell window and typing 'Add-AppxPackage -Path `"\\server\share\app.msix`" -AllUsers'." `
-                    -Code "psexec.exe \\$Target -s powershell.exe -ExecutionPolicy Bypass -Command `"Add-AppxPackage -Path '$($installer.Path)' -AllUsers`""
+                # Build the PowerShell command for modern apps
+                $psCommand = "Add-AppxPackage -Path `"$cleanPath`" -AllUsers"
 
-                $psCmd = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"Add-AppxPackage -Path '$($installer.Path)' -AllUsers`""
-                $fullArgs = "/accepteula \\$Target -s $psCmd"
+                # Append any extra parameters the user provided (ignoring legacy EXE switches)
+                if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
+                    $psCommand += " $($installer.Args)"
+                }
+
+                Wait-TrainingStep `
+                    -Desc "STEP 1: SILENT MSIX DEPLOYMENT`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine.`n`nWHAT IT DOES:`nBecause MSIX packages are installed per-user by default, we use PsExec to launch a hidden PowerShell session as the SYSTEM account. We then execute the 'Add-AppxPackage' cmdlet with the '-AllUsers' flag, which provisions the modern app for everyone on the machine. To prevent syntax errors with network paths, the command is Base64 encoded before execution.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated PowerShell window and typing 'Add-AppxPackage -Path `"\\server\share\app.msix`" -AllUsers'." `
+                    -Code "psexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
+
+                # Encode the command to prevent cmd.exe from mangling quotes in the UNC path
+                $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
+                $fullArgs = "/accepteula \\$Target -s powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded"
             } else {
+                # Standard EXE/MSI deployment
                 Wait-TrainingStep `
                     -Desc "STEP 1: SILENT EXE/MSI DEPLOYMENT`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Google Chrome, Adobe Reader, or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nWe use PsExec to connect to the target PC as the 'SYSTEM' account. We then execute the installer directly from the network share using 'silent' command-line switches (like /S or /qn). This bypasses UAC prompts and hides the installation wizard from the user.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open File Explorer, navigate to the network share, double-click the installer, type in your admin credentials when prompted by UAC, and click 'Next' through the installation wizard." `
-                    -Code "psexec.exe \\$Target -s `"$($installer.Path)`" $($installer.Args)"
+                    -Code "psexec.exe \\$Target -s `"$cleanPath`" $($installer.Args)"
 
-                $fullArgs = "/accepteula \\$Target -s `"$($installer.Path)`" $($installer.Args)"
+                $fullArgs = "/accepteula \\$Target -s `"$cleanPath`" $($installer.Args)"
             }
 
             Write-Host "  > [UHDC] Installing in background... (Please wait)"
+            Write-Host "  > [i] Note: Ensure 'Domain Computers' has Read access to the network share." -ForegroundColor DarkGray
 
             Start-Process $psExecPath -ArgumentList $fullArgs -Wait -NoNewWindow
 
