@@ -2,8 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Automatically detects .msix/.appx packages, stages them locally to bypass the 
-# "Double-Hop" SYSTEM network block, and provisions them via Add-AppxProvisionedPackage.
+# Universally stages ALL packages (.exe, .msi, .msix) locally to bypass the 
+# "Double-Hop" SYSTEM network block, and executes them via Base64-encoded PowerShell.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -324,21 +324,22 @@ if ($installer) {
         try {
             $cleanPath = $installer.Path.Trim(" `"'")
             $isMsix = $cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$'
+            $isMsi  = $cleanPath -match '\.msi$'
+
+            Write-Host "  > [UHDC] Staging package to target's local drive (Bypassing Double-Hop)..."
+
+            # Setup staging paths
+            $stagingDir = "\\$Target\c$\Temp\UHDC_Staging"
+            $fileName = Split-Path $cleanPath -Leaf
+            $stagingFile = "$stagingDir\$fileName"
+            $localTargetFile = "C:\Temp\UHDC_Staging\$fileName"
+
+            # Copy file over the network using the technician's credentials
+            if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
+            Copy-Item -Path $cleanPath -Destination $stagingFile -Force
 
             if ($isMsix) {
-                Write-Host "  > [UHDC] Staging MSIX package to target's local drive (Bypassing Double-Hop)..."
-
-                # Setup staging paths
-                $stagingDir = "\\$Target\c$\Temp\UHDC_Staging"
-                $fileName = Split-Path $cleanPath -Leaf
-                $stagingFile = "$stagingDir\$fileName"
-                $localTargetFile = "C:\Temp\UHDC_Staging\$fileName"
-
-                # Copy file over the network using the technician's credentials
-                if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
-                Copy-Item -Path $cleanPath -Destination $stagingFile -Force
-
-                # Build the DISM provisioning command using the LOCAL path
+                # Build the DISM provisioning command for modern apps
                 $psCommand = "Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
 
                 # Append any extra parameters the user provided
@@ -346,27 +347,31 @@ if ($installer) {
                     $psCommand += " $($installer.Args)"
                 }
 
-                # Add cleanup command to delete the staged file after installation
+                # Add cleanup command
                 $psCommand += "; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
 
                 Wait-TrainingStep `
                     -Desc "STEP 1: STAGE & PROVISION MSIX`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nFirst, we copy the .msix file to the target's C:\Temp folder. This bypasses the 'Double-Hop' issue where the remote SYSTEM account gets blocked from accessing network shares. Then, we use PsExec to launch a hidden PowerShell session as SYSTEM and execute 'Add-AppxProvisionedPackage'. This provisions the app into the Windows image so all current and future users get it. Finally, it deletes the temp file.`n`nIN-PERSON EQUIVALENT:`nCopying the file to the C: drive, opening an elevated PowerShell window, and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"C:\Temp\app.msix`" -SkipLicense'." `
                     -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
 
-                # Encode the command to prevent cmd.exe from mangling quotes
-                $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
-                $fullArgs = "/accepteula \\$Target -s powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded"
             } else {
-                # Standard EXE/MSI deployment
-                Wait-TrainingStep `
-                    -Desc "STEP 1: SILENT EXE/MSI DEPLOYMENT`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Google Chrome, Adobe Reader, or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nWe use PsExec to connect to the target PC as the 'SYSTEM' account. We then execute the installer directly from the network share using 'silent' command-line switches (like /S or /qn). This bypasses UAC prompts and hides the installation wizard from the user.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open File Explorer, navigate to the network share, double-click the installer, type in your admin credentials when prompted by UAC, and click 'Next' through the installation wizard." `
-                    -Code "psexec.exe \\$Target -s `"$cleanPath`" $($installer.Args)"
+                # Standard EXE/MSI deployment wrapped in PowerShell to ensure it waits before deleting
+                if ($isMsi) {
+                    $psCommand = "Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i `\`"$localTargetFile`\`" $($installer.Args)`" -Wait -NoNewWindow; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                } else {
+                    $psCommand = "Start-Process -FilePath `"$localTargetFile`" -ArgumentList `"$($installer.Args)`" -Wait -NoNewWindow; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                }
 
-                $fullArgs = "/accepteula \\$Target -s `"$cleanPath`" $($installer.Args)"
+                Wait-TrainingStep `
+                    -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Chrome or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then use PsExec to connect as the 'SYSTEM' account and launch a hidden PowerShell session. This session executes the installer using 'silent' command-line switches (like /S or /qn), waits for the installation to finish, and then deletes the temporary file.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
+                    -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
             }
 
             Write-Host "  > [UHDC] Installing in background... (Please wait)"
-            if (-not $isMsix) { Write-Host "  > [i] Note: Ensure 'Domain Computers' has Read access to the network share." -ForegroundColor DarkGray }
+
+            # Encode the command to prevent cmd.exe from mangling quotes
+            $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
+            $fullArgs = "/accepteula \\$Target -s powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded"
 
             Start-Process $psExecPath -ArgumentList $fullArgs -Wait -NoNewWindow
 
