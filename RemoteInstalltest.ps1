@@ -2,8 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Universally stages ALL packages locally, executes via Base64-encoded PowerShell,
-# and catches remote errors to prevent CLIXML serialization issues.
+# Universally stages ALL packages locally and generates an install.ps1 script on the target.
+# Progress streams are suppressed to prevent CLIXML serialization crashes over PsExec.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -353,26 +353,31 @@ if ($installer) {
             }
             Write-Host "  > [UHDC] Transfer complete in $($transferTime.TotalSeconds.ToString('0.0')) seconds."
 
-            # 5. Build the PowerShell execution payload
+            # 5. Build the PowerShell execution payload script
             $argString = if (-not [string]::IsNullOrWhiteSpace($installer.Args)) { $installer.Args } else { "" }
+            $scriptContent = ""
 
             if ($isMsix) {
                 # Strip legacy exe/msi silent switches if accidentally provided for MSIX
                 $argString = $argString -replace '(?i)^/([Sqx]|qn|quiet|norestart)\s*', ''
 
-                $psCommand = @"
+                $scriptContent = @"
+`$ProgressPreference = 'SilentlyContinue'
+`$ErrorActionPreference = 'Stop'
 try {
-    Add-AppxProvisionedPackage -Online -PackagePath "$localTargetFile" -SkipLicense $argString -ErrorAction Stop | Out-Null
+    Write-Output "Starting MSIX Provisioning..."
+    Add-AppxProvisionedPackage -Online -PackagePath "$localTargetFile" -SkipLicense $argString | Out-Null
     Write-Output "[SUCCESS] MSIX Provisioned Successfully."
 } catch {
     Write-Output "[ERROR] MSIX Install Failed: `$(`$_.Exception.Message)"
-} finally {
-    Remove-Item -Path "$localTargetFile" -Force -ErrorAction SilentlyContinue
 }
 "@
             } elseif ($isMsi) {
-                $psCommand = @"
+                $scriptContent = @"
+`$ProgressPreference = 'SilentlyContinue'
+`$ErrorActionPreference = 'Stop'
 try {
+    Write-Output "Starting MSI Installation..."
     `$proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `\`"$localTargetFile`\`" $argString" -Wait -PassThru -NoNewWindow
     if (`$proc.ExitCode -eq 0 -or `$proc.ExitCode -eq 3010) {
         Write-Output "[SUCCESS] MSI Installed Successfully (Exit Code: `$(`$proc.ExitCode))."
@@ -381,13 +386,14 @@ try {
     }
 } catch {
     Write-Output "[ERROR] MSI Install Failed: `$(`$_.Exception.Message)"
-} finally {
-    Remove-Item -Path "$localTargetFile" -Force -ErrorAction SilentlyContinue
 }
 "@
             } else {
-                $psCommand = @"
+                $scriptContent = @"
+`$ProgressPreference = 'SilentlyContinue'
+`$ErrorActionPreference = 'Stop'
 try {
+    Write-Output "Starting EXE Installation..."
     `$proc = Start-Process -FilePath "$localTargetFile" -ArgumentList "$argString" -Wait -PassThru -NoNewWindow
     if (`$proc.ExitCode -eq 0 -or `$proc.ExitCode -eq 3010) {
         Write-Output "[SUCCESS] EXE Installed Successfully (Exit Code: `$(`$proc.ExitCode))."
@@ -396,25 +402,23 @@ try {
     }
 } catch {
     Write-Output "[ERROR] EXE Install Failed: `$(`$_.Exception.Message)"
-} finally {
-    Remove-Item -Path "$localTargetFile" -Force -ErrorAction SilentlyContinue
 }
 "@
             }
 
+            # 6. Save the install script to the target
+            $scriptPath = "$stagingDir\install.ps1"
+            $localScriptPath = "C:\Temp\UHDC_Staging\install.ps1"
+            Set-Content -Path $scriptPath -Value $scriptContent -Force
+
             Wait-TrainingStep `
-                -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs an application installed, but they do not have local administrator rights, or you want to install it in the background.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then use PsExec to connect as the 'SYSTEM' account and launch a PowerShell session. This session executes the installer, waits synchronously for the installation to finish, captures the exit code, and then deletes the temporary file to clean up.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
-                -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -EncodedCommand ..."
+                -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs an application installed, but they do not have local administrator rights, or you want to install it in the background.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then generate a small 'install.ps1' script and copy it to the target as well. We use PsExec to connect as the 'SYSTEM' account and execute that script. The script suppresses progress bars (which crash PsExec), executes the installer, waits for it to finish, and captures the exit code.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
+                -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -File `"$localScriptPath`""
 
             Write-Host "  > [UHDC] Executing installer as SYSTEM... (Please wait)"
 
-            # Encode the command to prevent cmd.exe from mangling quotes
-            $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
-
-            # Wrap in cmd.exe /c to force PsExec to wait synchronously instead of detaching
-            $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-NonInteractive", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded)
-
-            # Execute via call operator to pipe output directly to the UHDC console
+            # Execute the script via PsExec
+            $psexecArgs = @("/accepteula", "\\$Target", "-s", "powershell.exe", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", $localScriptPath)
             $execOutput = & $psExecPath $psexecArgs 2>&1
 
             foreach ($line in $execOutput) {
@@ -434,6 +438,7 @@ try {
             }
 
             Write-Host " [UHDC] Deployment sequence finished."
+            Write-Host " [UHDC] [i] Files left in \\$Target\c$\Temp\UHDC_Staging for inspection." -ForegroundColor Yellow
 
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
