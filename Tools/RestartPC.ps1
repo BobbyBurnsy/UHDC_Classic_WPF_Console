@@ -1,7 +1,7 @@
 # RestartPC.ps1
 # Provides a themed GUI menu to send power commands (Restart, Shutdown, Logoff)
-# to a remote target. Utilizes PsExec to execute native shutdown.exe commands
-# locally on the target, bypassing common WMI and RPC firewall blocks.
+# to a remote target. Attempts WinRM first for cross-subnet reliability, 
+# then falls back to PsExec to bypass common WMI and RPC firewall blocks.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -226,37 +226,46 @@ if ($MenuWin.ShowDialog() -ne $true -or -not $Selection) {
 
 # Execute selected action
 try {
+    $cmdArgs = ""
+    $winRmCmd = {}
+
     switch ($Selection.Command) {
         "Restart" {
-            Wait-TrainingStep -Desc "STEP 1: STANDARD RESTART`n`nWHEN TO USE THIS:`nUse this when a PC needs a reboot, but you want to give the user a 60-second warning to save their work.`n`nWHAT IT DOES:`nWe use PsExec to run the native 'shutdown.exe' command. The '/r' switch tells it to restart, and the '/t 60' switch sets a 60-second countdown timer.`n`nIN-PERSON EQUIVALENT:`nClicking Start > Power > Restart." -Code "psexec.exe \\$Target -s shutdown /r /t 60"
-            Write-Host " [UHDC] [i] Initiating standard restart on $Target..." -ForegroundColor Cyan
-            Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /r /t 60" -Wait -NoNewWindow
-            Write-Host " [UHDC] Success: Restart command sent." -ForegroundColor Green
+            $cmdArgs = "shutdown /r /t 60"
+            $winRmCmd = { shutdown /r /t 60 }
+            Wait-TrainingStep -Desc "STEP 1: STANDARD RESTART`n`nWHEN TO USE THIS:`nUse this when a PC needs a reboot, but you want to give the user a 60-second warning to save their work.`n`nWHAT IT DOES:`nWe attempt to use WinRM to send the native 'shutdown.exe' command. If WinRM is blocked by a cross-subnet firewall, we automatically fall back to PsExec. The '/r' switch tells it to restart, and the '/t 60' switch sets a 60-second countdown timer.`n`nIN-PERSON EQUIVALENT:`nClicking Start > Power > Restart." -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { shutdown /r /t 60 }"
         }
         "ForceRestart" {
-            Wait-TrainingStep -Desc "STEP 1: FORCE RESTART`n`nWHEN TO USE THIS:`nUse this when a PC is completely frozen, or a user is not present and you need the machine to reboot immediately.`n`nWHAT IT DOES:`nWe add the '/f' (force) switch to the shutdown command, and set the timer to '/t 0'. This instantly kills all running applications without prompting the user to save.`n`nIN-PERSON EQUIVALENT:`nHolding down the physical power button on the computer." -Code "psexec.exe \\$Target -s shutdown /r /f /t 0"
-            Write-Host " [UHDC] [i] Initiating FORCE restart on $Target..." -ForegroundColor Red
-            Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /r /f /t 0" -Wait -NoNewWindow
-            Write-Host " [UHDC] Success: Force restart command sent." -ForegroundColor Green
+            $cmdArgs = "shutdown /r /f /t 0"
+            $winRmCmd = { shutdown /r /f /t 0 }
+            Wait-TrainingStep -Desc "STEP 1: FORCE RESTART`n`nWHEN TO USE THIS:`nUse this when a PC is completely frozen, or a user is not present and you need the machine to reboot immediately.`n`nWHAT IT DOES:`nWe add the '/f' (force) switch to the shutdown command, and set the timer to '/t 0'. This instantly kills all running applications without prompting the user to save.`n`nIN-PERSON EQUIVALENT:`nHolding down the physical power button on the computer." -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { shutdown /r /f /t 0 }"
         }
         "Logoff" {
-            Wait-TrainingStep -Desc "STEP 1: FORCE LOGOFF`n`nWHEN TO USE THIS:`nUse this when a user locked their screen and walked away, and another user needs to log into that specific PC.`n`nWHAT IT DOES:`nWe use PsExec to run the native 'rwinsta' (Reset Windows Station) command against the 'console' session. This forcefully terminates the active user's session and returns the PC to the Ctrl+Alt+Delete screen.`n`nIN-PERSON EQUIVALENT:`nOpening Task Manager, going to the Users tab, right-clicking the user, and selecting 'Sign off'." -Code "psexec.exe \\$Target -s rwinsta console"
-            Write-Host " [UHDC] [i] Forcing user logoff on $Target..." -ForegroundColor Yellow
-            Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s rwinsta console" -Wait -NoNewWindow
-            Write-Host " [UHDC] Success: Logoff command sent." -ForegroundColor Green
+            $cmdArgs = "rwinsta console"
+            $winRmCmd = { rwinsta console }
+            Wait-TrainingStep -Desc "STEP 1: FORCE LOGOFF`n`nWHEN TO USE THIS:`nUse this when a user locked their screen and walked away, and another user needs to log into that specific PC.`n`nWHAT IT DOES:`nWe run the native 'rwinsta' (Reset Windows Station) command against the 'console' session. This forcefully terminates the active user's session and returns the PC to the Ctrl+Alt+Delete screen.`n`nIN-PERSON EQUIVALENT:`nOpening Task Manager, going to the Users tab, right-clicking the user, and selecting 'Sign off'." -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { rwinsta console }"
         }
         "Shutdown" {
-            Wait-TrainingStep -Desc "STEP 1: REMOTE SHUTDOWN`n`nWHEN TO USE THIS:`nUse this when a machine needs to be powered off completely (e.g., before a scheduled power outage in a building).`n`nWHAT IT DOES:`nWe use the '/s' switch instead of '/r' to tell the machine to shut down and stay off.`n`nIN-PERSON EQUIVALENT:`nClicking Start > Power > Shut down." -Code "psexec.exe \\$Target -s shutdown /s /f /t 0"
-            Write-Host " [UHDC] [i] Initiating remote shutdown on $Target..." -ForegroundColor Cyan
-            Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /s /f /t 0" -Wait -NoNewWindow
-            Write-Host " [UHDC] Success: Shutdown command sent." -ForegroundColor Green
+            $cmdArgs = "shutdown /s /f /t 0"
+            $winRmCmd = { shutdown /s /f /t 0 }
+            Wait-TrainingStep -Desc "STEP 1: REMOTE SHUTDOWN`n`nWHEN TO USE THIS:`nUse this when a machine needs to be powered off completely (e.g., before a scheduled power outage in a building).`n`nWHAT IT DOES:`nWe use the '/s' switch instead of '/r' to tell the machine to shut down and stay off.`n`nIN-PERSON EQUIVALENT:`nClicking Start > Power > Shut down." -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { shutdown /s /f /t 0 }"
         }
         "Abort" {
-            Wait-TrainingStep -Desc "STEP 1: ABORT PENDING RESTART`n`nWHEN TO USE THIS:`nUse this if you accidentally sent a restart command with a timer, or if a Windows Update is about to force a reboot and the user begs for more time.`n`nWHAT IT DOES:`nWe use the '/a' (abort) switch to cancel any active shutdown countdowns on the target machine.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt quickly and typing 'shutdown /a'." -Code "psexec.exe \\$Target -s shutdown /a"
-            Write-Host " [UHDC] [i] Attempting to abort pending restart on $Target..." -ForegroundColor Cyan
-            Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s shutdown /a" -Wait -NoNewWindow
-            Write-Host " [UHDC] Success: Abort command sent." -ForegroundColor Green
+            $cmdArgs = "shutdown /a"
+            $winRmCmd = { shutdown /a }
+            Wait-TrainingStep -Desc "STEP 1: ABORT PENDING RESTART`n`nWHEN TO USE THIS:`nUse this if you accidentally sent a restart command with a timer, or if a Windows Update is about to force a reboot and the user begs for more time.`n`nWHAT IT DOES:`nWe use the '/a' (abort) switch to cancel any active shutdown countdowns on the target machine.`n`nIN-PERSON EQUIVALENT:`nOpening Command Prompt quickly and typing 'shutdown /a'." -Code "Invoke-Command -ComputerName `$Target -ScriptBlock { shutdown /a }"
         }
+    }
+
+    Write-Host " [UHDC] [i] Initiating $($Selection.Command) on $Target..." -ForegroundColor Cyan
+
+    try {
+        Invoke-Command -ComputerName $Target -ErrorAction Stop -ScriptBlock $winRmCmd
+        Write-Host " [UHDC] Success: Command sent via WinRM." -ForegroundColor Green
+    } catch {
+        Write-Host " [UHDC] [i] WinRM blocked. Falling back to PsExec..." -ForegroundColor DarkGray
+        Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s $cmdArgs" -Wait -NoNewWindow
+        Write-Host " [UHDC] Success: Command sent via PsExec." -ForegroundColor Green
     }
 
     # Audit log
