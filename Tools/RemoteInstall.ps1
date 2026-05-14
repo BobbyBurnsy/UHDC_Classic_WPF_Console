@@ -2,6 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
+# Universally stages ALL packages (.exe, .msi, .msix) locally to bypass the 
+# "Double-Hop" SYSTEM network block, and executes them via Base64-encoded PowerShell.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -139,7 +141,7 @@ function Show-ThemedInputBox {
 
     [string]$InputXAML = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Title="$Title" SizeToContent="Height" Width="450" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
+            Title="$Title" SizeToContent="Height" Width="480" Background="%%BG_MAIN%%" WindowStartupLocation="CenterScreen" Topmost="True" ResizeMode="NoResize">
         <StackPanel Margin="15">
             <TextBlock Text="$Prompt" Foreground="White" FontSize="14" Margin="0,0,0,10" TextWrapping="Wrap"/>
             <TextBox Name="InputBox" Text="$DefaultText" Background="%%BG_SEC%%" Foreground="%%ACC_PRI%%" FontSize="14" Height="28" Padding="4" BorderBrush="#555"/>
@@ -243,9 +245,16 @@ while ($true) {
         if ($Selection.Action -eq "ADD") {
             $n = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter display name (e.g., Google Chrome):"
             if (-not $n) { continue }
+
             $p = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter UNC path to installer:" -DefaultText "\\server\share\installer.exe"
             if (-not $p) { continue }
-            $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter silent switches (e.g., /S /q):" -DefaultText "/S"
+
+            $cleanPath = $p.Trim(" `"'")
+            if ($cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$') {
+                $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPackagePath) or leave blank:`n(Note: -Online and -SkipLicense are applied automatically)"
+            } else {
+                $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter silent switches (e.g., /S /q):" -DefaultText "/S"
+            }
 
             $newID = if ($lib.Count -gt 0) { ([int]($lib | Select-Object -ExpandProperty ID | Measure-Object -Maximum).Maximum) + 1 } else { 1 }
             $lib += [PSCustomObject]@{ID=$newID; Name=$n.Trim(); Path=$p.Trim(); Args=$a.Trim()}
@@ -281,7 +290,14 @@ while ($true) {
         elseif ($Selection.Action -eq "CUSTOM") {
             $path = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter UNC path to installer:" -DefaultText "\\server\share\installer.exe"
             if (-not $path) { continue }
-            $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter silent switches (e.g., /S /q):"
+
+            $cleanPath = $path.Trim(" `"'")
+            if ($cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$') {
+                $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPackagePath) or leave blank:`n(Note: -Online and -SkipLicense are applied automatically)"
+            } else {
+                $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter silent switches (e.g., /S /q):"
+            }
+
             $installer = [PSCustomObject]@{Name="Custom App"; Path=$path.Trim(); Args=$args.Trim()}
             break 
         }
@@ -300,19 +316,64 @@ while ($true) {
 if ($installer) {
     Write-Host "`n [UHDC] [i] Deploying $($installer.Name) to $Target..."
     Write-Host "      Path: $($installer.Path)"
-    Write-Host "      Args: $($installer.Args)"
+    if ($installer.Args) { Write-Host "      Args: $($installer.Args)" }
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
     if (Test-Path $psExecPath) {
         try {
-            Wait-TrainingStep `
-                -Desc "STEP 1: SILENT REMOTE INSTALLATION`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Google Chrome, Adobe Reader, or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nWe use PsExec to connect to the target PC as the 'SYSTEM' account. We then execute the installer directly from the network share using 'silent' command-line switches (like /S or /qn). This bypasses UAC prompts and hides the installation wizard from the user.`n`nIN-PERSON EQUIVALENT:`nIf you were physically at the user's desk, you would open File Explorer, navigate to the network share, double-click the installer, type in your admin credentials when prompted by UAC, and click 'Next' through the installation wizard." `
-                -Code "psexec.exe \\$Target -s `"$($installer.Path)`" $($installer.Args)"
+            $cleanPath = $installer.Path.Trim(" `"'")
+            $isMsix = $cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$'
+            $isMsi  = $cleanPath -match '\.msi$'
+
+            Write-Host "  > [UHDC] Staging package to target's local drive (Bypassing Double-Hop)..."
+
+            # Setup staging paths
+            $stagingDir = "\\$Target\c$\Temp\UHDC_Staging"
+            $fileName = Split-Path $cleanPath -Leaf
+            $stagingFile = "$stagingDir\$fileName"
+            $localTargetFile = "C:\Temp\UHDC_Staging\$fileName"
+
+            # Copy file over the network using the technician's credentials
+            if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
+            Copy-Item -Path $cleanPath -Destination $stagingFile -Force
+
+            if ($isMsix) {
+                # Build the DISM provisioning command for modern apps
+                $psCommand = "Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
+
+                # Append any extra parameters the user provided
+                if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
+                    $psCommand += " $($installer.Args)"
+                }
+
+                # Add cleanup command
+                $psCommand += "; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+
+                Wait-TrainingStep `
+                    -Desc "STEP 1: STAGE & PROVISION MSIX`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nFirst, we copy the .msix file to the target's C:\Temp folder. This bypasses the 'Double-Hop' issue where the remote SYSTEM account gets blocked from accessing network shares. Then, we use PsExec to launch a hidden PowerShell session as SYSTEM and execute 'Add-AppxProvisionedPackage'. This provisions the app into the Windows image so all current and future users get it. Finally, it deletes the temp file.`n`nIN-PERSON EQUIVALENT:`nCopying the file to the C: drive, opening an elevated PowerShell window, and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"C:\Temp\app.msix`" -SkipLicense'." `
+                    -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
+
+            } else {
+                # Standard EXE/MSI deployment wrapped in PowerShell to ensure it waits before deleting
+                if ($isMsi) {
+                    $psCommand = "Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i `\`"$localTargetFile`\`" $($installer.Args)`" -Wait -NoNewWindow; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                } else {
+                    $psCommand = "Start-Process -FilePath `"$localTargetFile`" -ArgumentList `"$($installer.Args)`" -Wait -NoNewWindow; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                }
+
+                Wait-TrainingStep `
+                    -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Chrome or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then use PsExec to connect as the 'SYSTEM' account and launch a hidden PowerShell session. This session executes the installer using 'silent' command-line switches (like /S or /qn), waits for the installation to finish, and then deletes the temporary file.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
+                    -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
+            }
 
             Write-Host "  > [UHDC] Installing in background... (Please wait)"
 
-            Start-Process $psExecPath -ArgumentList "/accepteula \\$Target -s `"$($installer.Path)`" $($installer.Args)" -Wait -NoNewWindow
+            # Encode the command to prevent cmd.exe from mangling quotes
+            $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
+            $fullArgs = "/accepteula \\$Target -s powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded"
+
+            Start-Process $psExecPath -ArgumentList $fullArgs -Wait -NoNewWindow
 
             Write-Host " [UHDC] Success: Deployment command finished."
 
