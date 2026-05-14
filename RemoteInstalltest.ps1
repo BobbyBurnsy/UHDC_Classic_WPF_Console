@@ -1,9 +1,9 @@
 # RemoteInstall.ps1
 # Provides a themed GUI interface to manage and silently deploy software to a 
-# remote target using PsExec (SYSTEM context). Supports saving commonly used 
-# application UNC paths and silent installation arguments to a central JSON library.
-# Universally stages ALL packages locally, verifies byte size, generates an install.ps1 
-# script on the target, and forces PsExec to wait synchronously.
+# remote target using PsExec. Supports saving commonly used application UNC paths.
+# Universally stages ALL packages locally, generates an install.ps1 script on the target,
+# and forces PsExec to wait synchronously while capturing a local transcript log.
+# Includes an Execution Context dropdown to choose between SYSTEM, Technician, and Active User.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -180,6 +180,7 @@ function Show-ThemedInputBox {
 
 # Main menu loop
 $installer = $null
+$runContext = "SYSTEM"
 
 while ($true) {
     $lib = Load-Lib
@@ -214,14 +215,31 @@ while ($true) {
                 </ListView.View>
             </ListView>
 
-            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Name="BtnCancel" Content="Cancel" Width="100" Height="35" Margin="0,0,10,0" Background="#444" Foreground="White" Cursor="Hand" BorderThickness="0" IsCancel="True"/>
-                <Button Name="BtnExecute" Content="Execute Selection" Width="140" Height="35" Background="#28A745" Foreground="White" Cursor="Hand" BorderThickness="0" FontWeight="Bold" IsDefault="True"/>
-            </StackPanel>
+            <Grid Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Run As:" Foreground="#AAAAAA" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <ComboBox Name="ComboContext" Width="200" Height="26" Background="%%BG_SEC%%" Foreground="Black" FontSize="13">
+                        <ComboBoxItem IsSelected="True">SYSTEM (Machine-Wide)</ComboBoxItem>
+                        <ComboBoxItem>Active User (Per-User Apps)</ComboBoxItem>
+                        <ComboBoxItem>Technician (Your Creds)</ComboBoxItem>
+                    </ComboBox>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Name="BtnCancel" Content="Cancel" Width="100" Height="35" Margin="0,0,10,0" Background="#444" Foreground="White" Cursor="Hand" BorderThickness="0" IsCancel="True"/>
+                    <Button Name="BtnExecute" Content="Execute Selection" Width="140" Height="35" Background="#28A745" Foreground="White" Cursor="Hand" BorderThickness="0" FontWeight="Bold" IsDefault="True"/>
+                </StackPanel>
+            </Grid>
         </Grid>
     </Window>
 "@
     $MenuXAML = $MenuXAML -replace '%%BG_MAIN%%', $ActiveColors.BG_Main
+    $MenuXAML = $MenuXAML -replace '%%BG_SEC%%', $ActiveColors.BG_Sec
     $MenuXAML = $MenuXAML -replace '%%BG_BTN%%', $ActiveColors.BG_Btn
     $MenuXAML = $MenuXAML -replace '%%ACC_PRI%%', $ActiveColors.Acc_Pri
 
@@ -231,6 +249,7 @@ while ($true) {
 
     $AppList = $MenuWin.FindName("AppList")
     $BtnExecute = $MenuWin.FindName("BtnExecute")
+    $ComboContext = $MenuWin.FindName("ComboContext")
 
     foreach ($item in $MenuOptions) { $AppList.Items.Add($item) | Out-Null }
 
@@ -241,6 +260,10 @@ while ($true) {
 
     if ($MenuWin.ShowDialog() -eq $true) {
         $Selection = $AppList.SelectedItem
+
+        if ($ComboContext.Text -match "Technician") { $runContext = "TECH" } 
+        elseif ($ComboContext.Text -match "Active User") { $runContext = "USER" } 
+        else { $runContext = "SYSTEM" }
 
         if ($Selection.Action -eq "ADD") {
             $n = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter display name (e.g., Google Chrome):"
@@ -273,6 +296,7 @@ while ($true) {
             $DelWin.FindName("BtnExecute").Content = "Delete Selected"
             $DelWin.FindName("BtnExecute").Background = "#DC3545"
             $DelList = $DelWin.FindName("AppList")
+            $DelWin.FindName("ComboContext").Visibility = "Collapsed"
             foreach ($item in $lib) { $DelList.Items.Add($item) | Out-Null }
 
             $DelWin.FindName("BtnExecute").Add_Click({
@@ -317,6 +341,7 @@ if ($installer) {
     Write-Host "`n [UHDC] [i] Deploying $($installer.Name) to $Target..."
     Write-Host "      Path: $($installer.Path)"
     if ($installer.Args) { Write-Host "      Args: $($installer.Args)" }
+    Write-Host "      Context: $runContext"
 
     $psExecPath = Join-Path -Path $SharedRoot -ChildPath "Core\psexec.exe"
 
@@ -432,25 +457,86 @@ Stop-Transcript
             $localScriptPath = "C:\Temp\UHDC_Staging\install.ps1"
             Set-Content -Path $scriptPath -Value $scriptContent -Force
 
-            Wait-TrainingStep `
-                -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs an application installed, but they do not have local administrator rights, or you want to install it in the background.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then generate a small 'install.ps1' script and copy it to the target as well. We use PsExec to connect as the 'SYSTEM' account and execute that script. The script suppresses progress bars (which crash PsExec), executes the installer, waits for it to finish, and captures the exit code.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
-                -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s cmd.exe /c powershell.exe -File `"$localScriptPath`""
+            # 7. Execution Context Routing
+            if ($runContext -eq "USER") {
+                Write-Host "  > [UHDC] Querying active user session for Per-User deployment..."
+                $compInfo = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName $Target -ErrorAction Stop
+                $activeUser = $compInfo.UserName
 
-            Write-Host "  > [UHDC] Executing installer as SYSTEM... (Please wait)"
+                if (-not $activeUser) {
+                    throw "Cannot install as Active User: No user is currently logged into $Target."
+                }
+                Write-Host "  > [UHDC] Active user detected: $activeUser"
+                Write-Host "  > [UHDC] Building Scheduled Task bridge to bypass UAC..."
 
-            # Execute the script via PsExec wrapped in CMD to force synchronous wait
-            # Using Start-Process -Wait prevents the RemoteException formatting spam
-            $psexecArgs = "/accepteula \\$Target -s cmd.exe /c `"powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File C:\Temp\UHDC_Staging\install.ps1`""
+                # Build a launcher script that creates a Scheduled Task to run the install as the Active User
+                $launcherContent = @"
+`$TaskName = "UHDC_Install_`$((Get-Date).Ticks)"
+`$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File C:\Temp\UHDC_Staging\install.ps1"
+`$Principal = New-ScheduledTaskPrincipal -UserId "$activeUser" -LogonType Interactive
+`$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddYears(1)
+Register-ScheduledTask -TaskName `$TaskName -Action `$Action -Trigger `$Trigger -Principal `$Principal -Force | Out-Null
+Start-ScheduledTask -TaskName `$TaskName
+while ((Get-ScheduledTask -TaskName `$TaskName).State -eq 'Running') { Start-Sleep -Seconds 2 }
+Unregister-ScheduledTask -TaskName `$TaskName -Confirm:`$false | Out-Null
 
-            Start-Process -FilePath $psExecPath -ArgumentList $psexecArgs -Wait -NoNewWindow
+`$logPath = "C:\Temp\UHDC_Staging\install_log.txt"
+if (Test-Path `$logPath) {
+    Get-Content `$logPath | Where-Object { `$_ -match "\[SUCCESS\]|\[ERROR\]" } | Write-Output
+}
+"@
+                $launcherPath = "$stagingDir\launcher.ps1"
+                Set-Content -Path $launcherPath -Value $launcherContent -Force
 
-            Write-Host "`n [UHDC] Deployment sequence finished."
+                Wait-TrainingStep `
+                    -Desc "STEP 1: PER-USER SCHEDULED TASK INJECTION`n`nWHEN TO USE THIS:`nUse this to silently deploy per-user .exe apps (like Canva, Spotify, WebEx) directly into the active user's AppData folder without needing their password.`n`nWHAT IT DOES:`nWe use PsExec as SYSTEM to dynamically build and register a Scheduled Task on the target PC. We set the task to run as the logged-in user (Interactive Token), trigger it immediately, wait for the installation to finish in their hidden background session, and then delete the task to clean up.`n`nIN-PERSON EQUIVALENT:`nSitting at the user's desk while they are logged in, downloading the .exe, and double-clicking it." `
+                    -Code "psexec.exe \\$Target -s powershell.exe -File C:\Temp\UHDC_Staging\launcher.ps1"
+
+                $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", "C:\Temp\UHDC_Staging\launcher.ps1")
+
+            } elseif ($runContext -eq "TECH") {
+                Wait-TrainingStep `
+                    -Desc "STEP 1: TECHNICIAN CONTEXT EXECUTION`n`nWHEN TO USE THIS:`nUse this when an installer explicitly blocks the SYSTEM account from running it, but you still want to install it silently in the background.`n`nWHAT IT DOES:`nWe use PsExec WITHOUT the '-s' switch. Because we already staged the file locally to the C: drive, we bypass the Double-Hop network block, allowing PsExec to execute the installer using your delegated network credentials.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated Command Prompt on the user's PC and running the installer." `
+                    -Code "psexec.exe \\$Target powershell.exe -File `"$localScriptPath`""
+
+                $psexecArgs = @("/accepteula", "\\$Target", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
+
+            } else {
+                Wait-TrainingStep `
+                    -Desc "STEP 1: SYSTEM CONTEXT EXECUTION`n`nWHEN TO USE THIS:`nUse this for 95% of enterprise deployments (Chrome, Adobe, Office) to install the software machine-wide for all users.`n`nWHAT IT DOES:`nWe use PsExec with the '-s' switch to connect as the 'SYSTEM' account and execute the staged install script. The script suppresses progress bars (which crash PsExec), executes the installer, waits for it to finish, and captures the exit code.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
+                    -Code "psexec.exe \\$Target -s powershell.exe -File `"$localScriptPath`""
+
+                $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
+            }
+
+            Write-Host "  > [UHDC] Executing installer... (Please wait)"
+
+            # Execute via call operator to pipe output directly to the UHDC console
+            $execOutput = & $psExecPath $psexecArgs 2>&1
+
+            foreach ($line in $execOutput) {
+                $strLine = [string]$line
+                # Filter out standard PsExec noise
+                if ($strLine -match "PsExec v" -or $strLine -match "Sysinternals" -or $strLine -match "Copyright" -or $strLine -match "starting on" -or $strLine -match "exited with error code") { continue }
+
+                if (-not [string]::IsNullOrWhiteSpace($strLine)) {
+                    if ($strLine -match "\[ERROR\]") {
+                        Write-Host "    $strLine" -ForegroundColor Red
+                    } elseif ($strLine -match "\[SUCCESS\]") {
+                        Write-Host "    $strLine" -ForegroundColor Green
+                    } else {
+                        Write-Host "    $strLine"
+                    }
+                }
+            }
+
+            Write-Host " [UHDC] Deployment sequence finished."
             Write-Host " [UHDC] [i] Check \\$Target\c$\Temp\UHDC_Staging\install_log.txt for the exact results." -ForegroundColor Yellow
 
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
                 if (Test-Path $AuditHelper) {
-                    & $AuditHelper -Target $Target -Action "Deployed Software: $($installer.Name)" -SharedRoot $SharedRoot
+                    & $AuditHelper -Target $Target -Action "Deployed Software: $($installer.Name) ($runContext)" -SharedRoot $SharedRoot
                 }
             }
         } catch {
