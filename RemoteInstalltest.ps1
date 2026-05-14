@@ -2,8 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Universally stages ALL packages (.exe, .msi, .msix) locally to bypass the 
-# "Double-Hop" SYSTEM network block, and executes them via Base64-encoded PowerShell.
+# Universally stages ALL packages locally, executes via Base64-encoded PowerShell,
+# and catches remote errors to prevent CLIXML serialization issues.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -338,28 +338,23 @@ if ($installer) {
             if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
             Copy-Item -Path $cleanPath -Destination $stagingFile -Force
 
+            # Build the PowerShell command wrapped in a Try/Catch to prevent CLIXML errors
             if ($isMsix) {
-                # Build the DISM provisioning command for modern apps
-                $psCommand = "Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
-
-                # Append any extra parameters the user provided
+                $psCommand = "try { Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
                 if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
                     $psCommand += " $($installer.Args)"
                 }
-
-                # Add cleanup command
-                $psCommand += "; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                $psCommand += " -ErrorAction Stop; Write-Output '[SUCCESS] MSIX Provisioned Successfully.' } catch { Write-Output `"[ERROR] MSIX Install Failed: `$(`$_.Exception.Message)`" }; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
 
                 Wait-TrainingStep `
                     -Desc "STEP 1: STAGE & PROVISION MSIX`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nFirst, we copy the .msix file to the target's C:\Temp folder. This bypasses the 'Double-Hop' issue where the remote SYSTEM account gets blocked from accessing network shares. Then, we use PsExec to launch a hidden PowerShell session as SYSTEM and execute 'Add-AppxProvisionedPackage'. This provisions the app into the Windows image so all current and future users get it. Finally, it deletes the temp file.`n`nIN-PERSON EQUIVALENT:`nCopying the file to the C: drive, opening an elevated PowerShell window, and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"C:\Temp\app.msix`" -SkipLicense'." `
                     -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
 
             } else {
-                # Standard EXE/MSI deployment wrapped in PowerShell to ensure it waits before deleting
                 if ($isMsi) {
-                    $psCommand = "Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i `\`"$localTargetFile`\`" $($installer.Args)`" -Wait -NoNewWindow; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                    $psCommand = "try { Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i `\`"$localTargetFile`\`" $($installer.Args)`" -Wait -NoNewWindow; Write-Output '[SUCCESS] MSI Installed Successfully.' } catch { Write-Output `"[ERROR] MSI Install Failed: `$(`$_.Exception.Message)`" }; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
                 } else {
-                    $psCommand = "Start-Process -FilePath `"$localTargetFile`" -ArgumentList `"$($installer.Args)`" -Wait -NoNewWindow; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                    $psCommand = "try { Start-Process -FilePath `"$localTargetFile`" -ArgumentList `"$($installer.Args)`" -Wait -NoNewWindow; Write-Output '[SUCCESS] EXE Installed Successfully.' } catch { Write-Output `"[ERROR] EXE Install Failed: `$(`$_.Exception.Message)`" }; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
                 }
 
                 Wait-TrainingStep `
@@ -371,11 +366,30 @@ if ($installer) {
 
             # Encode the command to prevent cmd.exe from mangling quotes
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
-            $fullArgs = "/accepteula \\$Target -s powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encoded"
 
-            Start-Process $psExecPath -ArgumentList $fullArgs -Wait -NoNewWindow
+            # Use an array for arguments to pass to the call operator (&)
+            $psexecArgs = @("/accepteula", "\\$Target", "-s", "powershell.exe", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-EncodedCommand", $encoded)
 
-            Write-Host " [UHDC] Success: Deployment command finished."
+            # Execute via call operator to pipe output directly to the UHDC console (prevents flashing windows)
+            $execOutput = & $psExecPath $psexecArgs 2>&1
+
+            foreach ($line in $execOutput) {
+                $strLine = [string]$line
+                # Filter out standard PsExec noise
+                if ($strLine -match "PsExec v" -or $strLine -match "Sysinternals" -or $strLine -match "Copyright" -or $strLine -match "starting on" -or $strLine -match "exited with error code") { continue }
+
+                if (-not [string]::IsNullOrWhiteSpace($strLine)) {
+                    if ($strLine -match "\[ERROR\]") {
+                        Write-Host "    $strLine" -ForegroundColor Red
+                    } elseif ($strLine -match "\[SUCCESS\]") {
+                        Write-Host "    $strLine" -ForegroundColor Green
+                    } else {
+                        Write-Host "    $strLine"
+                    }
+                }
+            }
+
+            Write-Host " [UHDC] Deployment sequence finished."
 
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
