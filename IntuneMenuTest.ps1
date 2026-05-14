@@ -509,7 +509,7 @@ $BtnLAPS.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We use the direct object lookup method to bypass filter restrictions.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'&`$select=credentials`""
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?%24filter=deviceId%20eq%20'`$(`$dev.AzureAdDeviceId)'&%24select=credentials`""
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
@@ -521,8 +521,8 @@ $BtnLAPS.Add_Click({
     }
 
     try {
-        # DIRECT REST API CALL: Bypasses the buggy cmdlet and correctly filters the collection
-        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$filter=deviceId eq '$aadId'&`$select=credentials"
+        # FIX: Strictly URL-Encode the OData query parameters (%24 for $, %20 for spaces) to prevent 400 Bad Request
+        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?%24filter=deviceId%20eq%20'$aadId'&%24select=credentials"
         $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
 
         if ($lapsData.value -and $lapsData.value.Count -gt 0) {
@@ -557,22 +557,19 @@ $BtnUnlock.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
-        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`" -Body `"{}`""
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            # DIRECT REST API CALL: Explicitly sending an empty JSON body prevents HTTP 411/400 errors on POST
-            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -Body "{}" -ContentType "application/json" -ErrorAction Stop
+            # FIX: Microsoft strictly forbids a request body for removeDevicePasscode. 
+            # We removed the -Body "{}" parameter so it sends a completely empty POST request.
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -ErrorAction Stop
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
-            $err = Get-GraphError $_
-            if ($err -match "BadRequest" -or $err -match "Not Supported") {
-                $OutputText.Text = "Unlock failed: Intune rejected the command. (Possible reasons: No passcode is currently set, device is offline, or Apple is blocking it because the device is not 'Supervised')."
-            } else {
-                $OutputText.Text = "Unlock failed: $err"
-            }
+            # Removed the generic error message so you can see the exact API failure if it happens again
+            $OutputText.Text = "Unlock failed: $(Get-GraphError $_)"
         }
     }
 })
