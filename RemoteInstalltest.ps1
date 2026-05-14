@@ -336,15 +336,18 @@ if ($installer) {
 
             # Copy file over the network using the technician's credentials
             if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
+
+            Write-Host "  > [UHDC] Transferring file over network (This may take a moment for large files)..."
             Copy-Item -Path $cleanPath -Destination $stagingFile -Force
 
             # Build the PowerShell command wrapped in a Try/Catch to prevent CLIXML errors
+            # We pipe the installation commands to Out-Null to suppress the success objects that cause the CLIXML crash
             if ($isMsix) {
                 $psCommand = "try { Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
                 if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
                     $psCommand += " $($installer.Args)"
                 }
-                $psCommand += " -ErrorAction Stop; Write-Output '[SUCCESS] MSIX Provisioned Successfully.' } catch { Write-Output `"[ERROR] MSIX Install Failed: `$(`$_.Exception.Message)`" }; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                $psCommand += " -ErrorAction Stop | Out-Null; Write-Output '[SUCCESS] MSIX Provisioned Successfully.' } catch { Write-Output `"[ERROR] MSIX Install Failed: `$(`$_.Exception.Message)`" }; Start-Sleep -Seconds 5; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
 
                 Wait-TrainingStep `
                     -Desc "STEP 1: STAGE & PROVISION MSIX`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nFirst, we copy the .msix file to the target's C:\Temp folder. This bypasses the 'Double-Hop' issue where the remote SYSTEM account gets blocked from accessing network shares. Then, we use PsExec to launch a hidden PowerShell session as SYSTEM and execute 'Add-AppxProvisionedPackage'. This provisions the app into the Windows image so all current and future users get it. Finally, it deletes the temp file.`n`nIN-PERSON EQUIVALENT:`nCopying the file to the C: drive, opening an elevated PowerShell window, and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"C:\Temp\app.msix`" -SkipLicense'." `
@@ -352,9 +355,9 @@ if ($installer) {
 
             } else {
                 if ($isMsi) {
-                    $psCommand = "try { Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i `\`"$localTargetFile`\`" $($installer.Args)`" -Wait -NoNewWindow; Write-Output '[SUCCESS] MSI Installed Successfully.' } catch { Write-Output `"[ERROR] MSI Install Failed: `$(`$_.Exception.Message)`" }; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                    $psCommand = "try { Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i `\`"$localTargetFile`\`" $($installer.Args)`" -Wait -NoNewWindow | Out-Null; Write-Output '[SUCCESS] MSI Installed Successfully.' } catch { Write-Output `"[ERROR] MSI Install Failed: `$(`$_.Exception.Message)`" }; Start-Sleep -Seconds 5; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
                 } else {
-                    $psCommand = "try { Start-Process -FilePath `"$localTargetFile`" -ArgumentList `"$($installer.Args)`" -Wait -NoNewWindow; Write-Output '[SUCCESS] EXE Installed Successfully.' } catch { Write-Output `"[ERROR] EXE Install Failed: `$(`$_.Exception.Message)`" }; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                    $psCommand = "try { Start-Process -FilePath `"$localTargetFile`" -ArgumentList `"$($installer.Args)`" -Wait -NoNewWindow | Out-Null; Write-Output '[SUCCESS] EXE Installed Successfully.' } catch { Write-Output `"[ERROR] EXE Install Failed: `$(`$_.Exception.Message)`" }; Start-Sleep -Seconds 5; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
                 }
 
                 Wait-TrainingStep `
