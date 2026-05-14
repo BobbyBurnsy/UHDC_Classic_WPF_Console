@@ -465,6 +465,7 @@ Stop-Transcript
             Set-Content -Path $scriptPath -Value $scriptContent -Force
 
             # 7. Execution Context Routing
+            $activeUser = $null
             if ($runContext -eq "USER") {
                 Write-Host "  > [UHDC] Querying active user session for Per-User deployment..."
                 $compInfo = Get-CimInstance -ClassName Win32_ComputerSystem -ComputerName $Target -ErrorAction Stop
@@ -539,7 +540,14 @@ if (Test-Path `$logPath) {
             }
 
             Write-Host " [UHDC] Deployment sequence finished."
-            Write-Host " [UHDC] [i] Check \\$Target\c$\Temp\UHDC_Staging\install_log.txt for the exact results." -ForegroundColor Yellow
+
+            # Dynamically display the correct UNC path for the log file
+            $displayLogPath = "\\$Target\c$\Temp\UHDC_Staging\install_log.txt"
+            if ($runContext -eq "USER" -and $activeUser) {
+                $cleanActiveUser = $activeUser.Split('\')[-1]
+                $displayLogPath = "\\$Target\c$\Users\$cleanActiveUser\AppData\Local\Temp\UHDC_install_log.txt"
+            }
+            Write-Host " [UHDC] [i] Check $displayLogPath for the exact results." -ForegroundColor Yellow
 
             if (-not [string]::IsNullOrWhiteSpace($SharedRoot)) {
                 $AuditHelper = Join-Path -Path $SharedRoot -ChildPath "Core\Helper_AuditLog.ps1"
