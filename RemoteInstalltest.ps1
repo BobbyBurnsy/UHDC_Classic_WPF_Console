@@ -326,6 +326,11 @@ if ($installer) {
             $isMsix = $cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$'
             $isMsi  = $cleanPath -match '\.msi$'
 
+            # 1. Validate Source File
+            if (-not (Test-Path $cleanPath)) {
+                throw "Source file cannot be found or accessed: $cleanPath"
+            }
+
             Write-Host "  > [UHDC] Staging package to target's local drive (Bypassing Double-Hop)..."
 
             # Setup staging paths
@@ -334,14 +339,18 @@ if ($installer) {
             $stagingFile = "$stagingDir\$fileName"
             $localTargetFile = "C:\Temp\UHDC_Staging\$fileName"
 
-            # Copy file over the network using the technician's credentials
+            # 2. Create Directory and Copy File
             if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
 
             Write-Host "  > [UHDC] Transferring file over network (This may take a moment for large files)..."
-            Copy-Item -Path $cleanPath -Destination $stagingFile -Force
+            Copy-Item -Path $cleanPath -Destination $stagingFile -Force -ErrorAction Stop
+
+            # 3. Verify Transfer
+            if (-not (Test-Path $stagingFile)) {
+                throw "Verification failed: The file did not successfully copy to $stagingFile"
+            }
 
             # Build the PowerShell command wrapped in a Try/Catch to prevent CLIXML errors
-            # We pipe the installation commands to Out-Null to suppress the success objects that cause the CLIXML crash
             if ($isMsix) {
                 $psCommand = "try { Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
                 if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
@@ -401,7 +410,7 @@ if ($installer) {
                 }
             }
         } catch {
-            Write-Host " [UHDC] [!] Error: Execution failed. $($_.Exception.Message)"
+            Write-Host " [UHDC] [!] Error: Execution failed. $($_.Exception.Message)" -ForegroundColor Red
         }
     } else {
         Write-Host " [UHDC] [!] Error: psexec.exe not found at $psExecPath"
