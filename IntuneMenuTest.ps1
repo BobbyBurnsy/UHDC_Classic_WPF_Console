@@ -483,13 +483,10 @@ $BtnBitLocker.Add_Click({
     $OutputText.Text = "UHDC: Querying Entra ID for keys..."
     [System.Windows.Forms.Application]::DoEvents()
     try {
-        # Step 1: Get the Key ID using the filter
         $keys = @(Get-MgInformationProtectionBitlockerRecoveryKey -Filter "deviceId eq '$($dev.AzureAdDeviceId)'" -ErrorAction Stop)
 
         if ($keys.Count -gt 0) {
             $keyId = $keys[0].Id
-
-            # Step 2: Query the specific Key ID to reveal the password string
             $keyDetails = Get-MgInformationProtectionBitlockerRecoveryKey -BitlockerRecoveryKeyId $keyId -Property "key" -ErrorAction Stop
 
             if ($keyDetails.Key) {
@@ -508,8 +505,8 @@ $BtnBitLocker.Add_Click({
 $BtnLAPS.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
-        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We use the direct object lookup method to bypass filter restrictions.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?%24filter=deviceId%20eq%20'`$(`$dev.AzureAdDeviceId)'&%24select=credentials`""
+        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/beta/directory/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
@@ -521,8 +518,9 @@ $BtnLAPS.Add_Click({
     }
 
     try {
-        # FIX: Strictly URL-Encode the OData query parameters (%24 for $, %20 for spaces) to prevent 400 Bad Request
-        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?%24filter=deviceId%20eq%20'$aadId'&%24select=credentials"
+        # FIX: Using the BETA endpoint. The v1.0 endpoint is highly restrictive and often throws 400 Bad Request.
+        # The beta endpoint is much more forgiving with OData queries for LAPS.
+        $uri = "https://graph.microsoft.com/beta/directory/deviceLocalCredentials?`$filter=deviceId eq '$aadId'"
         $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
 
         if ($lapsData.value -and $lapsData.value.Count -gt 0) {
@@ -531,7 +529,6 @@ $BtnLAPS.Add_Click({
 
             $pwd = $null
 
-            # Microsoft recently started Base64-encoding LAPS passwords in the API response
             if ($credObj.password) { 
                 $pwd = $credObj.password 
             } elseif ($credObj.passwordBase64) { 
@@ -557,18 +554,17 @@ $BtnUnlock.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
-        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/beta/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            # FIX: Microsoft strictly forbids a request body for removeDevicePasscode. 
-            # We removed the -Body "{}" parameter so it sends a completely empty POST request.
-            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -ErrorAction Stop
+            # FIX: Using the BETA endpoint. The v1.0 endpoint strictly rejects this command for many device types.
+            # We also ensure NO body is sent, as the API expects a completely empty POST request.
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/beta/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -ErrorAction Stop
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
-            # Removed the generic error message so you can see the exact API failure if it happens again
             $OutputText.Text = "Unlock failed: $(Get-GraphError $_)"
         }
     }
@@ -578,13 +574,13 @@ $BtnRemoteLock.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP X: REMOTE LOCK`n`nWHEN TO USE THIS:`nUse this when a user misplaces their mobile device but isn't sure if it's permanently lost yet.`n`nWHAT IT DOES:`nWe send an MDM command to instantly lock the device screen, requiring the PIN/Biometrics to unlock it.`n`nIN-PERSON EQUIVALENT:`nPressing the power/sleep button on the side of the phone." `
-        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/remoteLock`" -Body `"{}`""
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/remoteLock`""
 
     if ([System.Windows.MessageBox]::Show("Send remote lock command to $($dev.DeviceName)?", "UHDC Confirm", "YesNo") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending lock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/remoteLock" -Body "{}" -ContentType "application/json" -ErrorAction Stop
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/remoteLock" -ErrorAction Stop
             $OutputText.Text = "UHDC: Remote lock command dispatched."
         } catch {
             $OutputText.Text = "Lock failed: $(Get-GraphError $_)"
@@ -596,14 +592,14 @@ $BtnWipe.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 5: REMOTE WIPE`n`nWHEN TO USE THIS:`nUse this when a device is reported lost or stolen, or when an employee leaves and the device needs to be factory reset for the next user.`n`nWHAT IT DOES:`nWe send a destructive MDM command to the device instructing it to immediately factory reset and wipe all data.`n`nIN-PERSON EQUIVALENT:`nBooting into the recovery partition and selecting 'Wipe data/factory reset'." `
-        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/wipe`" -Body `"{}`""
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/wipe`""
 
     $msg = "WARNING: You are about to issue a REMOTE FACTORY RESET for $($dev.DeviceName).`n`nThis will permanently erase all data on the device. Are you absolutely sure?"
     if ([System.Windows.MessageBox]::Show($msg, "UHDC Danger: Wipe Device", "YesNo", "Warning") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending wipe command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/wipe" -Body "{}" -ContentType "application/json" -ErrorAction Stop
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/wipe" -ErrorAction Stop
             $OutputText.Text = "[UHDC] Success: Wipe command dispatched to $($dev.DeviceName)."
         } catch {
             $OutputText.Text = "Wipe failed: $(Get-GraphError $_)"
@@ -670,7 +666,6 @@ $BtnAddPhone.Add_Click({
         $OutputText.Text = "UHDC: Adding $newPhone to account..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            # DIRECT REST API CALL: Bypasses the buggy New-MgUserAuthenticationPhoneMethod cmdlet
             $body = @{ phoneNumber = $newPhone; phoneType = "mobile" } | ConvertTo-Json -Compress
             Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/users/$($script:ResolvedUser.Id)/authentication/phoneMethods" -Body $body -ContentType "application/json" -ErrorAction Stop
 
@@ -687,7 +682,7 @@ $BtnSync.Add_Click({
     $OutputText.Text = "UHDC: Sending sync command..."
     [System.Windows.Forms.Application]::DoEvents()
     try {
-        Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/syncDevice" -Body "{}" -ContentType "application/json" -ErrorAction Stop
+        Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/syncDevice" -ErrorAction Stop
         $OutputText.Text = "UHDC: Sync command dispatched."
     } catch {
         $OutputText.Text = "Sync failed: $(Get-GraphError $_)"
@@ -700,7 +695,7 @@ $BtnReboot.Add_Click({
         $OutputText.Text = "UHDC: Sending reboot command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/rebootNow" -Body "{}" -ContentType "application/json" -ErrorAction Stop
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/rebootNow" -ErrorAction Stop
             $OutputText.Text = "UHDC: Reboot command dispatched."
         } catch {
             $OutputText.Text = "Reboot failed: $(Get-GraphError $_)"
