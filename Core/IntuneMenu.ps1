@@ -44,6 +44,22 @@ function Wait-TrainingStep {
     }
 }
 
+# Deep Error Extractor for Microsoft Graph
+function Get-GraphError {
+    param($ErrorRecord)
+    $msg = $ErrorRecord.Exception.Message
+    try {
+        # Attempt to parse the JSON payload hidden in the error message
+        if ($msg -match '\{.*\}') {
+            $jsonStr = [regex]::Match($msg, '\{.*\}', [System.Text.RegularExpressions.RegexOptions]::Singleline).Value
+            $json = $jsonStr | ConvertFrom-Json
+            if ($json.error.message) { return $json.error.message }
+            if ($json.Message) { return $json.Message }
+        }
+    } catch {}
+    return $msg
+}
+
 # Load configuration and domain filtering
 $OrgName = "IT"
 try {
@@ -58,11 +74,15 @@ try {
     }
 } catch { }
 
+# Resolve Technician's Domain
 $TechUPN = whoami /upn 2>$null
 if (-not $TechUPN) {
     try { $TechUPN = (Get-ADUser $env:USERNAME -Properties UserPrincipalName).UserPrincipalName } catch {}
 }
 $TechDomain = if ($TechUPN -match "@(.*)$") { $matches[1] } else { "" }
+
+# Extract base domain (e.g., from it.contoso.com -> contoso.com) to prevent false positives on subdomains
+$TechDomainBase = if ($TechDomain -match "([^\.]+\.[^\.]+)$") { $matches[1] } else { $TechDomain }
 
 # Theme engine integration
 $ActiveColors = @{
@@ -85,6 +105,10 @@ if (-not [string]::IsNullOrWhiteSpace($ThemeB64)) {
     } catch {}
 }
 
+# Load required .NET assemblies
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName System.Windows.Forms
+
 # Graph API authentication
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -105,8 +129,6 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
         return
     }
 }
-
-Add-Type -AssemblyName PresentationFramework
 
 # UI definition (XAML)
 [string]$XAML = @"
@@ -199,16 +221,16 @@ Add-Type -AssemblyName PresentationFramework
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#FFD700"/>
-                                <Setter Property="Foreground" Value="#FFD700"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="#B366FF"/>
+                                <Setter Property="Foreground" Value="#B366FF"/>
                                 <Setter TargetName="border" Property="Effect">
                                     <Setter.Value>
-                                        <DropShadowEffect Color="#FFD700" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                        <DropShadowEffect Color="#B366FF" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
                                     </Setter.Value>
                                 </Setter>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#FFD700"/>
+                                <Setter TargetName="border" Property="Background" Value="#B366FF"/>
                                 <Setter Property="Foreground" Value="%%BG_MAIN%%"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -266,6 +288,7 @@ Add-Type -AssemblyName PresentationFramework
             <Button Name="BtnBitLocker" Content="Get BitLocker Key" Width="130" Height="30" Margin="5" Style="{StaticResource ActionBtn}" Visibility="Collapsed"/>
             <Button Name="BtnLAPS" Content="Get LAPS Pass" Width="130" Height="30" Margin="5" Style="{StaticResource WarningBtn}" Visibility="Collapsed"/>
             <Button Name="BtnUnlock" Content="Remove Passcode" Width="130" Height="30" Margin="5" Style="{StaticResource WarningBtn}" Visibility="Collapsed"/>
+            <Button Name="BtnRemoteLock" Content="Remote Lock" Width="130" Height="30" Margin="5" Style="{StaticResource WarningBtn}" Visibility="Collapsed"/>
             <Button Name="BtnWipe" Content="Remote Wipe" Width="130" Height="30" Margin="5" Style="{StaticResource DangerBtn}" Visibility="Collapsed"/>
             <Button Name="BtnSync" Content="Force Sync" Width="130" Height="30" Margin="5" Style="{StaticResource StdBtn}" Visibility="Collapsed"/>
             <Button Name="BtnReboot" Content="Reboot Device" Width="130" Height="30" Margin="5" Style="{StaticResource DangerBtn}" Visibility="Collapsed"/>
@@ -306,19 +329,21 @@ $DeviceList  = $Form.FindName("DeviceList")
 $ActionPanel = $Form.FindName("ActionPanel")
 $OutputText  = $Form.FindName("OutputText")
 
-$BtnBitLocker = $Form.FindName("BtnBitLocker")
-$BtnLAPS      = $Form.FindName("BtnLAPS")
-$BtnUnlock    = $Form.FindName("BtnUnlock")
-$BtnWipe      = $Form.FindName("BtnWipe")
-$BtnSync      = $Form.FindName("BtnSync")
-$BtnReboot    = $Form.FindName("BtnReboot")
-$BtnMFA       = $Form.FindName("BtnMFA")
-$BtnClearMFA  = $Form.FindName("BtnClearMFA")
-$InputPhone   = $Form.FindName("InputPhone")
-$BtnAddPhone  = $Form.FindName("BtnAddPhone")
+$BtnBitLocker  = $Form.FindName("BtnBitLocker")
+$BtnLAPS       = $Form.FindName("BtnLAPS")
+$BtnUnlock     = $Form.FindName("BtnUnlock")
+$BtnRemoteLock = $Form.FindName("BtnRemoteLock")
+$BtnWipe       = $Form.FindName("BtnWipe")
+$BtnSync       = $Form.FindName("BtnSync")
+$BtnReboot     = $Form.FindName("BtnReboot")
+$BtnMFA        = $Form.FindName("BtnMFA")
+$BtnClearMFA   = $Form.FindName("BtnClearMFA")
+$InputPhone    = $Form.FindName("InputPhone")
+$BtnAddPhone   = $Form.FindName("BtnAddPhone")
 
-$ResolvedUser = $null
-$GlobalDevices = @()
+# Explicitly scope these so the button click handlers can access them
+$script:ResolvedUser = $null
+$script:GlobalDevices = @()
 
 # Initialization
 $Form.Add_Loaded({
@@ -335,13 +360,27 @@ $Form.Add_Loaded({
             $HeaderTitle.Text = "Scanning Intune for device: $TargetComputer..."
             [System.Windows.Forms.Application]::DoEvents()
 
-            $deviceMatch = Get-MgDeviceManagementManagedDevice -Filter "deviceName eq '$TargetComputer'" -ErrorAction SilentlyContinue
+            $SafeComp = $TargetComputer -replace "'","''"
+            $deviceMatch = Get-MgDeviceManagementManagedDevice -Filter "deviceName eq '$SafeComp'" -ErrorAction Stop
+
             if ($deviceMatch) {
-                if ($TechDomain -and $deviceMatch.UserPrincipalName -and $deviceMatch.UserPrincipalName -notmatch $TechDomain) {
-                    [System.Windows.MessageBox]::Show("Access Denied: The requested device ($TargetComputer) belongs to a different agency/domain ($($deviceMatch.UserPrincipalName)).", "Cross-Agency Block", "OK", "Error")
-                } else {
-                    $RawDeviceList += $deviceMatch
-                    $HeaderString += " [Device Found]"
+                $devices = if ($deviceMatch -is [System.Array]) { $deviceMatch } else { @($deviceMatch) }
+
+                foreach ($dev in $devices) {
+                    $upn = $dev.UserPrincipalName
+                    $domainMatch = $false
+
+                    if (-not $TechDomainBase) { $domainMatch = $true }
+                    elseif ([string]::IsNullOrWhiteSpace($upn)) { $domainMatch = $true } # Fail open if API doesn't return UPN
+                    elseif ($upn -notmatch "@") { $domainMatch = $true } # Local/Malformed account bypass
+                    elseif ($upn -match [regex]::Escape($TechDomainBase)) { $domainMatch = $true }
+
+                    if (-not $domainMatch) {
+                        [System.Windows.MessageBox]::Show("Access Denied: The requested device ($($dev.DeviceName)) is assigned to a different agency/domain ($upn).", "Cross-Agency Block", "OK", "Error")
+                    } else {
+                        $RawDeviceList += $dev
+                        $HeaderString += " [Device Found]"
+                    }
                 }
             }
         }
@@ -350,18 +389,33 @@ $Form.Add_Loaded({
             $HeaderTitle.Text = "Scanning Azure AD for user: $TargetUser..."
             [System.Windows.Forms.Application]::DoEvents()
 
-            $users = Get-MgUser -Filter "userPrincipalName eq '$TargetUser' or mail eq '$TargetUser' or mailNickname eq '$TargetUser' or displayName eq '$TargetUser' or startsWith(userPrincipalName,'$TargetUser')" -All -ErrorAction SilentlyContinue
+            $SafeUser = $TargetUser -replace "'","''"
+            $users = @(Get-MgUser -Filter "userPrincipalName eq '$SafeUser' or mail eq '$SafeUser' or mailNickname eq '$SafeUser'" -ErrorAction Stop)
 
-            if ($users -and $users.Count -gt 0) {
-                $ResolvedUser = $users[0]
+            if ($users.Count -gt 0) {
+                $script:ResolvedUser = $users[0]
+                $upn = $script:ResolvedUser.UserPrincipalName
+                $mail = $script:ResolvedUser.Mail
 
-                if ($TechDomain -and $ResolvedUser.UserPrincipalName -notmatch $TechDomain) {
-                    [System.Windows.MessageBox]::Show("Access Denied: The requested user ($($ResolvedUser.UserPrincipalName)) belongs to a different agency/domain.", "Cross-Agency Block", "OK", "Error")
-                    $ResolvedUser = $null
+                $domainMatch = $false
+                if (-not $TechDomainBase) { $domainMatch = $true }
+                elseif ([string]::IsNullOrWhiteSpace($upn) -and [string]::IsNullOrWhiteSpace($mail)) { $domainMatch = $true } # Fail open
+                elseif ($upn -and $upn -match [regex]::Escape($TechDomainBase)) { $domainMatch = $true }
+                elseif ($mail -and $mail -match [regex]::Escape($TechDomainBase)) { $domainMatch = $true }
+                elseif ($upn -and $upn -notmatch "@") { $domainMatch = $true } # Local/Malformed account bypass
+
+                if (-not $domainMatch) {
+                    $displayId = if ($upn) { $upn } else { $script:ResolvedUser.DisplayName }
+                    [System.Windows.MessageBox]::Show("Access Denied: The requested user ($displayId) belongs to a different agency/domain.", "Cross-Agency Block", "OK", "Error")
+                    $script:ResolvedUser = $null
                 } else {
-                    $HeaderString += " [$($ResolvedUser.DisplayName)]"
-                    $userDevices = Get-MgDeviceManagementManagedDevice -Filter "userId eq '$($ResolvedUser.Id)'" -ErrorAction SilentlyContinue
-                    if ($userDevices) { $RawDeviceList += $userDevices }
+                    $HeaderString += " [$($script:ResolvedUser.DisplayName)]"
+
+                    $userDevices = @(Get-MgUserManagedDevice -UserId $script:ResolvedUser.Id -ErrorAction Stop)
+
+                    if ($userDevices.Count -gt 0) { 
+                        $RawDeviceList += $userDevices 
+                    }
                 }
             } else {
                 $HeaderString += " [User Not Found]"
@@ -371,9 +425,9 @@ $Form.Add_Loaded({
         $HeaderTitle.Text = $HeaderString
 
         if ($RawDeviceList.Count -gt 0) {
-            $GlobalDevices = $RawDeviceList | Select-Object -Unique -Property Id | Sort-Object deviceName
+            $script:GlobalDevices = @($RawDeviceList | Sort-Object -Property Id -Unique | Sort-Object deviceName)
 
-            foreach ($dev in $GlobalDevices) {
+            foreach ($dev in $script:GlobalDevices) {
                 $status = if ($dev.ComplianceState -eq "compliant") { "[OK]" } else { "[X]" }
                 $DeviceList.Items.Add("$status [$($dev.OperatingSystem)] $($dev.DeviceName) - $($dev.SerialNumber)") | Out-Null
             }
@@ -382,149 +436,230 @@ $Form.Add_Loaded({
             $DeviceList.IsEnabled = $false
         }
     } catch {
-        $HeaderTitle.Text = "API communication error."
+        $HeaderTitle.Text = "API Error: $(Get-GraphError $_)"
     }
 })
 
 $DeviceList.Add_SelectionChanged({
-    if ($DeviceList.SelectedIndex -ge 0 -and $GlobalDevices) {
+    if ($DeviceList.SelectedIndex -ge 0 -and $script:GlobalDevices) {
         $ActionPanel.Visibility = "Visible"
         $OutputText.Text = "Ready..."
-        $selectedDev = $GlobalDevices[$DeviceList.SelectedIndex]
+        $selectedDev = $script:GlobalDevices[$DeviceList.SelectedIndex]
 
-        $BtnBitLocker.Visibility = "Collapsed"
-        $BtnLAPS.Visibility      = "Collapsed"
-        $BtnUnlock.Visibility    = "Collapsed"
-        $BtnWipe.Visibility      = "Collapsed"
-        $BtnSync.Visibility      = "Collapsed"
-        $BtnReboot.Visibility    = "Collapsed"
+        # Reset all buttons to hidden
+        $BtnBitLocker.Visibility  = "Collapsed"
+        $BtnLAPS.Visibility       = "Collapsed"
+        $BtnUnlock.Visibility     = "Collapsed"
+        $BtnRemoteLock.Visibility = "Collapsed"
+        $BtnWipe.Visibility       = "Collapsed"
+        $BtnSync.Visibility       = "Collapsed"
+        $BtnReboot.Visibility     = "Collapsed"
 
         if ($selectedDev) {
-            $BtnSync.Visibility = "Visible"
-            $BtnWipe.Visibility = "Visible"
-
+            # Windows Devices
             if ($selectedDev.OperatingSystem -match "Windows") {
                 $BtnBitLocker.Visibility = "Visible"
                 $BtnLAPS.Visibility      = "Visible"
                 $BtnReboot.Visibility    = "Visible"
             }
-
-            if ($selectedDev.OperatingSystem -match "iOS|Android|iPadOS") {
-                $BtnUnlock.Visibility = "Visible"
+            # Mobile Devices (iOS, Android, iPadOS, Mac)
+            else {
+                $BtnUnlock.Visibility     = "Visible"
+                $BtnRemoteLock.Visibility = "Visible"
+                $BtnSync.Visibility       = "Visible"
+                $BtnReboot.Visibility     = "Visible"
+                $BtnWipe.Visibility       = "Visible"
             }
         }
     }
 })
 
 $BtnBitLocker.Add_Click({
-    $dev = $GlobalDevices[$DeviceList.SelectedIndex]
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
-        -Desc "STEP 2: RETRIEVE BITLOCKER KEY`n`nWHEN TO USE THIS:`nUse this when a user reboots their laptop and is prompted with a blue BitLocker recovery screen.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API (Entra ID) for the specific device ID to retrieve its escrowed BitLocker recovery key.`n`nIN-PERSON EQUIVALENT:`nLogging into the Azure Portal, searching for the device, and clicking 'Recovery Keys'." `
-        -Code "Get-MgInformationProtectionBitlockerRecoveryKey -Filter `"deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+        -Desc "STEP 2: RETRIEVE BITLOCKER KEY`n`nWHEN TO USE THIS:`nUse this when a user reboots their laptop and is prompted with a blue BitLocker recovery screen.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API (Entra ID) for the specific device ID to retrieve its escrowed BitLocker recovery key. Because the API hides the actual password string in list queries, we must first get the Key ID, and then make a second direct query to reveal the password.`n`nIN-PERSON EQUIVALENT:`nLogging into the Azure Portal, searching for the device, and clicking 'Recovery Keys'." `
+        -Code "Get-MgInformationProtectionBitlockerRecoveryKey -BitlockerRecoveryKeyId `$keyId -Property `"key`""
 
     $OutputText.Text = "UHDC: Querying Entra ID for keys..."
     [System.Windows.Forms.Application]::DoEvents()
     try {
-        $keys = Get-MgInformationProtectionBitlockerRecoveryKey -Filter "deviceId eq '$($dev.AzureAdDeviceId)'" -Property "key"
-        if ($keys) { $OutputText.Text = "RECOVERY KEY: $($keys[0].Key)" }
-        else { $OutputText.Text = "No keys found for this device." }
-    } catch { $OutputText.Text = "Insufficient permissions to read keys." }
+        # Step 1: Get the Key ID using the filter
+        $keys = @(Get-MgInformationProtectionBitlockerRecoveryKey -Filter "deviceId eq '$($dev.AzureAdDeviceId)'" -ErrorAction Stop)
+
+        if ($keys.Count -gt 0) {
+            $keyId = $keys[0].Id
+
+            # Step 2: Query the specific Key ID to reveal the password string
+            $keyDetails = Get-MgInformationProtectionBitlockerRecoveryKey -BitlockerRecoveryKeyId $keyId -Property "key" -ErrorAction Stop
+
+            if ($keyDetails.Key) {
+                $OutputText.Text = "RECOVERY KEY: $($keyDetails.Key)" 
+            } else {
+                $OutputText.Text = "Key retrieved but is blank. Check BitLockerKey.Read.All permissions."
+            }
+        } else { 
+            $OutputText.Text = "No keys found for this device." 
+        }
+    } catch { 
+        $OutputText.Text = "BitLocker retrieval failed: $(Get-GraphError $_)" 
+    }
 })
 
 $BtnLAPS.Add_Click({
-    $dev = $GlobalDevices[$DeviceList.SelectedIndex]
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
-        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/deviceLocalCredentials?`$filter=deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+        -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials. We use the direct object lookup method to bypass filter restrictions.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
+        -Code "Invoke-MgGraphRequest -Method GET -Uri `"https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/`$(`$dev.AzureAdDeviceId)?`%24select=credentials`""
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
+
+    $aadId = $dev.AzureAdDeviceId
+    if ([string]::IsNullOrWhiteSpace($aadId)) {
+        $OutputText.Text = "LAPS failed: This device does not have an Azure AD Device ID (Not AAD Joined)."
+        return
+    }
+
     try {
-        $uri = "https://graph.microsoft.com/v1.0/deviceLocalCredentials?`$filter=deviceId eq '$($dev.AzureAdDeviceId)'&`$select=credentials"
-        $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri
-        if ($lapsData.value) { $OutputText.Text = "CLOUD LAPS: $($lapsData.value.credentials.password)" }
-        else { $OutputText.Text = "No Cloud LAPS data available." }
-    } catch { $OutputText.Text = "LAPS retrieval failed." }
+        # DIRECT LOOKUP: No $filter used. We just append the Azure AD Device ID directly to the endpoint.
+        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/$aadId?%24select=credentials"
+        $lapsData = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+
+        if ($lapsData -and $lapsData.credentials) {
+            $creds = $lapsData.credentials
+            $credObj = if ($creds -is [array]) { $creds[0] } else { $creds }
+
+            $pwd = $null
+
+            # Microsoft recently started Base64-encoding LAPS passwords in the API response
+            if ($credObj.password) { 
+                $pwd = $credObj.password 
+            } elseif ($credObj.passwordBase64) { 
+                try {
+                    $pwd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($credObj.passwordBase64))
+                } catch { $pwd = "Error decoding Base64 password." }
+            }
+
+            if ($pwd) {
+                $OutputText.Text = "CLOUD LAPS: $pwd"
+            } else {
+                $OutputText.Text = "LAPS data found, but password property was empty."
+            }
+        } else {
+            $OutputText.Text = "No Cloud LAPS data available for this device."
+        }
+    } catch {
+        $OutputText.Text = "LAPS retrieval failed: $(Get-GraphError $_)"
+    }
 })
 
 $BtnUnlock.Add_Click({
-    $dev = $GlobalDevices[$DeviceList.SelectedIndex]
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
-        -Code "Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId `$dev.Id"
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
-        Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId $dev.Id
-        $OutputText.Text = "UHDC: Mobile unlock command dispatched."
+        $OutputText.Text = "UHDC: Sending unlock command..."
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode" -ErrorAction Stop
+            $OutputText.Text = "UHDC: Mobile unlock command dispatched."
+        } catch {
+            $err = Get-GraphError $_
+            if ($err -match "BadRequest" -or $err -match "Not Supported") {
+                $OutputText.Text = "Unlock failed: Intune rejected the command. (Possible reasons: No passcode is currently set, device is offline, or Apple is blocking it because the device is not 'Supervised')."
+            } else {
+                $OutputText.Text = "Unlock failed: $err"
+            }
+        }
+    }
+})
+
+$BtnRemoteLock.Add_Click({
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
+    Wait-TrainingStep `
+        -Desc "STEP X: REMOTE LOCK`n`nWHEN TO USE THIS:`nUse this when a user misplaces their mobile device but isn't sure if it's permanently lost yet.`n`nWHAT IT DOES:`nWe send an MDM command to instantly lock the device screen, requiring the PIN/Biometrics to unlock it.`n`nIN-PERSON EQUIVALENT:`nPressing the power/sleep button on the side of the phone." `
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/remoteLock`""
+
+    if ([System.Windows.MessageBox]::Show("Send remote lock command to $($dev.DeviceName)?", "UHDC Confirm", "YesNo") -eq "Yes") {
+        $OutputText.Text = "UHDC: Sending lock command..."
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/remoteLock" -ErrorAction Stop
+            $OutputText.Text = "UHDC: Remote lock command dispatched."
+        } catch {
+            $OutputText.Text = "Lock failed: $(Get-GraphError $_)"
+        }
     }
 })
 
 $BtnWipe.Add_Click({
-    $dev = $GlobalDevices[$DeviceList.SelectedIndex]
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 5: REMOTE WIPE`n`nWHEN TO USE THIS:`nUse this when a device is reported lost or stolen, or when an employee leaves and the device needs to be factory reset for the next user.`n`nWHAT IT DOES:`nWe send a destructive MDM command to the device instructing it to immediately factory reset and wipe all data.`n`nIN-PERSON EQUIVALENT:`nBooting into the recovery partition and selecting 'Wipe data/factory reset'." `
-        -Code "Invoke-MgWipeDeviceManagementManagedDevice -ManagedDeviceId `$dev.Id"
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/wipe`""
 
     $msg = "WARNING: You are about to issue a REMOTE FACTORY RESET for $($dev.DeviceName).`n`nThis will permanently erase all data on the device. Are you absolutely sure?"
     if ([System.Windows.MessageBox]::Show($msg, "UHDC Danger: Wipe Device", "YesNo", "Warning") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending wipe command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            Invoke-MgWipeDeviceManagementManagedDevice -ManagedDeviceId $dev.Id -ErrorAction Stop
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/wipe" -ErrorAction Stop
             $OutputText.Text = "[UHDC] Success: Wipe command dispatched to $($dev.DeviceName)."
         } catch {
-            $OutputText.Text = "Wipe failed: $($_.Exception.Message)"
+            $OutputText.Text = "Wipe failed: $(Get-GraphError $_)"
         }
     }
 })
 
 $BtnMFA.Add_Click({
-    if (-not $ResolvedUser) {
+    if (-not $script:ResolvedUser) {
         $OutputText.Text = "MFA requires a successfully linked user account."
         return
     }
     Wait-TrainingStep `
         -Desc "STEP 6: VIEW MFA METHODS`n`nWHEN TO USE THIS:`nUse this when a user claims they aren't receiving their text messages or calls for multi-factor authentication.`n`nWHAT IT DOES:`nWe query Entra ID to list all phone numbers currently registered to the user's account for authentication.`n`nIN-PERSON EQUIVALENT:`nLogging into the Entra ID portal, finding the user, and clicking 'Authentication methods'." `
-        -Code "Get-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id"
+        -Code "Get-MgUserAuthenticationPhoneMethod -UserId `$script:ResolvedUser.Id"
 
     $OutputText.Text = "UHDC: Fetching registered MFA phones..."
     [System.Windows.Forms.Application]::DoEvents()
     try {
-        $methods = Get-MgUserAuthenticationPhoneMethod -UserId $ResolvedUser.Id
+        $methods = Get-MgUserAuthenticationPhoneMethod -UserId $script:ResolvedUser.Id
         if ($methods) {
             $msg = "Registered Methods:`n"
             foreach ($m in $methods) { $msg += "- $($m.PhoneType): $($m.PhoneNumber)`n" }
             $OutputText.Text = $msg
         } else { $OutputText.Text = "No MFA phone methods found." }
-    } catch { $OutputText.Text = "Failed to access authentication methods." }
+    } catch { $OutputText.Text = "Failed to access authentication methods: $(Get-GraphError $_)" }
 })
 
 $BtnClearMFA.Add_Click({
-    if (-not $ResolvedUser) {
+    if (-not $script:ResolvedUser) {
         $OutputText.Text = "MFA requires a successfully linked user account."
         return
     }
     Wait-TrainingStep `
         -Desc "STEP 7: CLEAR MFA METHODS`n`nWHEN TO USE THIS:`nUse this when a user gets a new phone number and is locked out of their account because the MFA prompts are going to their old phone.`n`nWHAT IT DOES:`nWe iterate through and delete all registered phone methods for the user. The next time they log in, Microsoft will force them to register a new method.`n`nIN-PERSON EQUIVALENT:`nClicking 'Require re-register MFA' in the Entra ID portal." `
-        -Code "`$methods = Get-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id`nforeach (`$m in `$methods) { Remove-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id -PhoneAuthenticationMethodId `$m.Id }"
+        -Code "`$methods = Get-MgUserAuthenticationPhoneMethod -UserId `$script:ResolvedUser.Id`nforeach (`$m in `$methods) { Remove-MgUserAuthenticationPhoneMethod -UserId `$script:ResolvedUser.Id -PhoneAuthenticationMethodId `$m.Id }"
 
-    if ([System.Windows.MessageBox]::Show("Are you sure you want to DELETE all registered MFA phone numbers for $($ResolvedUser.DisplayName)? They will be forced to re-register on next login.", "Clear MFA", "YesNo", "Warning") -eq "Yes") {
+    if ([System.Windows.MessageBox]::Show("Are you sure you want to DELETE all registered MFA phone numbers for $($script:ResolvedUser.DisplayName)? They will be forced to re-register on next login.", "Clear MFA", "YesNo", "Warning") -eq "Yes") {
         $OutputText.Text = "UHDC: Clearing MFA methods..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            $methods = Get-MgUserAuthenticationPhoneMethod -UserId $ResolvedUser.Id
+            $methods = Get-MgUserAuthenticationPhoneMethod -UserId $script:ResolvedUser.Id
             $cleared = 0
             foreach ($m in $methods) {
-                Remove-MgUserAuthenticationPhoneMethod -UserId $ResolvedUser.Id -PhoneAuthenticationMethodId $m.Id -ErrorAction Stop
+                Remove-MgUserAuthenticationPhoneMethod -UserId $script:ResolvedUser.Id -PhoneAuthenticationMethodId $m.Id -ErrorAction Stop
                 $cleared++
             }
             $OutputText.Text = "[UHDC] Success: Cleared $cleared MFA methods. User must re-register."
-        } catch { $OutputText.Text = "Failed to clear MFA: $($_.Exception.Message)" }
+        } catch { $OutputText.Text = "Failed to clear MFA: $(Get-GraphError $_)" }
     }
 })
 
 $BtnAddPhone.Add_Click({
-    if (-not $ResolvedUser) {
+    if (-not $script:ResolvedUser) {
         $OutputText.Text = "MFA requires a successfully linked user account."
         return
     }
@@ -532,31 +667,43 @@ $BtnAddPhone.Add_Click({
     if ($newPhone -match "^\+1") {
         Wait-TrainingStep `
             -Desc "STEP 8: ADD SMS MFA`n`nWHEN TO USE THIS:`nUse this to manually add a new phone number to a user's account so they can receive SMS codes.`n`nWHAT IT DOES:`nWe use the Graph API to inject a new 'mobile' phone authentication method directly into the user's Entra ID profile.`n`nIN-PERSON EQUIVALENT:`nHaving the user log into mysignins.microsoft.com and manually adding a phone number." `
-            -Code "New-MgUserAuthenticationPhoneMethod -UserId `$ResolvedUser.Id -PhoneType `"mobile`" -PhoneNumber `$newPhone"
+            -Code "New-MgUserAuthenticationPhoneMethod -UserId `$script:ResolvedUser.Id -PhoneType `"mobile`" -PhoneNumber `$newPhone"
 
         $OutputText.Text = "UHDC: Adding $newPhone to account..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            New-MgUserAuthenticationPhoneMethod -UserId $ResolvedUser.Id -PhoneType "mobile" -PhoneNumber $newPhone -ErrorAction Stop
+            New-MgUserAuthenticationPhoneMethod -UserId $script:ResolvedUser.Id -PhoneType "mobile" -PhoneNumber $newPhone -ErrorAction Stop
             $OutputText.Text = "[UHDC] Success: $newPhone added as primary SMS MFA."
             $InputPhone.Text = ""
-        } catch { $OutputText.Text = "Error: $($_.Exception.Message)" }
+        } catch { $OutputText.Text = "Error: $(Get-GraphError $_)" }
     } else {
         $OutputText.Text = "Error: Use international format (+15550001111)"
     }
 })
 
 $BtnSync.Add_Click({
-    $dev = $GlobalDevices[$DeviceList.SelectedIndex]
-    Invoke-MgSyncDeviceManagementManagedDevice -ManagedDeviceId $dev.Id
-    $OutputText.Text = "UHDC: Sync command dispatched."
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
+    $OutputText.Text = "UHDC: Sending sync command..."
+    [System.Windows.Forms.Application]::DoEvents()
+    try {
+        Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/syncDevice" -ErrorAction Stop
+        $OutputText.Text = "UHDC: Sync command dispatched."
+    } catch {
+        $OutputText.Text = "Sync failed: $(Get-GraphError $_)"
+    }
 })
 
 $BtnReboot.Add_Click({
-    $dev = $GlobalDevices[$DeviceList.SelectedIndex]
+    $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     if ([System.Windows.MessageBox]::Show("Send reboot command to $($dev.DeviceName)?", "UHDC Confirm", "YesNo") -eq "Yes") {
-        Invoke-MgRebootDeviceManagementManagedDevice -ManagedDeviceId $dev.Id
-        $OutputText.Text = "UHDC: Reboot command dispatched."
+        $OutputText.Text = "UHDC: Sending reboot command..."
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/rebootNow" -ErrorAction Stop
+            $OutputText.Text = "UHDC: Reboot command dispatched."
+        } catch {
+            $OutputText.Text = "Reboot failed: $(Get-GraphError $_)"
+        }
     }
 })
 
