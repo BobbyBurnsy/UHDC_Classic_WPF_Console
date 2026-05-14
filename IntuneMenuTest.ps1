@@ -49,6 +49,14 @@ function Get-GraphError {
     param($ErrorRecord)
     $msg = $ErrorRecord.Exception.Message
     try {
+        # Check if the error details contain the raw JSON response from Microsoft
+        if ($null -ne $ErrorRecord.ErrorDetails -and $null -ne $ErrorRecord.ErrorDetails.Message) {
+            $detailJson = $ErrorRecord.ErrorDetails.Message | ConvertFrom-Json
+            if ($detailJson.error.message) { return $detailJson.error.message }
+            return $ErrorRecord.ErrorDetails.Message
+        }
+
+        # Fallback: regex out the JSON payload from the exception message
         if ($msg -match '\{.*\}') {
             $jsonStr = [regex]::Match($msg, '\{.*\}', [System.Text.RegularExpressions.RegexOptions]::Singleline).Value
             $json = $jsonStr | ConvertFrom-Json
@@ -293,7 +301,7 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
 
         <ListBox Grid.Row="2" Name="DeviceList" Background="%%BG_SEC%%" Foreground="%%ACC_PRI%%" FontSize="14" BorderBrush="#555555" BorderThickness="1" Margin="0,0,0,10" SelectionMode="Single"/>
 
-        <!-- FIX: Changed from TextBlock to TextBox to allow selecting and copying text. Added Consolas font and increased size. -->
+        <!-- Selectable Output Console -->
         <TextBox Grid.Row="3" Name="OutputText" Text="Select a device to see available actions." Foreground="%%ACC_SEC%%" Background="Transparent" BorderThickness="0" TextWrapping="Wrap" Margin="0,10,0,10" FontFamily="Consolas" FontSize="16" IsReadOnly="True"/>
 
         <GroupBox Grid.Row="4" Header="User Authentication Methods (MFA)" Foreground="#AAAAAA" BorderBrush="#333333" Padding="0">
@@ -539,22 +547,19 @@ $BtnUnlock.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
-        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/beta/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode"
-            Invoke-MgGraphRequest -Method POST -Uri $uri -ContentType "application/json" -ErrorAction Stop
+            # FIX: Switched to the BETA endpoint which mirrors the Web Portal's queuing behavior
+            $uri = "https://graph.microsoft.com/beta/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode"
+            Invoke-MgGraphRequest -Method POST -Uri $uri -ErrorAction Stop
 
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
             $OutputText.Text = "Unlock failed: $(Get-GraphError $_)"
-
-            if ($OutputText.Text -match "BadRequest" -or $OutputText.Text -match "NotSupported") {
-                $OutputText.Text += "`r`n(Hint: Apple requires 'Supervised' mode to remove passcodes. Android BYOD blocks device-level unlocks.)"
-            }
         }
     }
 })
