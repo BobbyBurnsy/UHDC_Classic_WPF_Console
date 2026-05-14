@@ -494,7 +494,7 @@ $BtnLAPS.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 3: RETRIEVE CLOUD LAPS`n`nWHEN TO USE THIS:`nUse this when you need local administrator rights on an Entra-joined (cloud-only) machine to install software or change system settings.`n`nWHAT IT DOES:`nWe query the Microsoft Graph API for the device's rotating Local Administrator Password Solution (LAPS) credentials.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune/Entra portal, locating the device, and clicking 'Local administrator password'." `
-        -Code "Get-MgDirectoryDeviceLocalCredential -Filter `"deviceId eq '`$(`$dev.AzureAdDeviceId)'`""
+        -Code "Get-MgDirectoryDeviceLocalCredential -DeviceLocalCredentialInfoId `$(`$dev.AzureAdDeviceId)"
 
     $OutputText.Text = "UHDC: Retrieving Cloud LAPS..."
     [System.Windows.Forms.Application]::DoEvents()
@@ -506,11 +506,11 @@ $BtnLAPS.Add_Click({
     }
 
     try {
-        # FIX: Using the native cmdlet to guarantee perfect URL encoding and avoid 400 Bad Request
-        $lapsData = @(Get-MgDirectoryDeviceLocalCredential -Filter "deviceId eq '$aadId'" -ErrorAction Stop)
+        # FIX: Using the correct -DeviceLocalCredentialInfoId parameter instead of the invalid -Filter parameter
+        $lapsData = Get-MgDirectoryDeviceLocalCredential -DeviceLocalCredentialInfoId $aadId -Property "credentials" -ErrorAction Stop
 
-        if ($lapsData.Count -gt 0 -and $lapsData[0].Credentials) {
-            $creds = if ($lapsData[0].Credentials -is [System.Array]) { $lapsData[0].Credentials } else { @($lapsData[0].Credentials) }
+        if ($lapsData -and $lapsData.Credentials) {
+            $creds = if ($lapsData.Credentials -is [System.Array]) { $lapsData.Credentials } else { @($lapsData.Credentials) }
 
             # Sort by RefreshDateTime to ensure we grab the most recent active password
             $latest = $creds | Sort-Object -Property RefreshDateTime -Descending | Select-Object -First 1
@@ -539,16 +539,18 @@ $BtnUnlock.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
-        -Code "Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId `$dev.Id"
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            # FIX: Using the native cmdlet. If this throws an error, it is the raw Intune rejection message.
-            Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId $dev.Id -ErrorAction Stop
+            # FIX: Sending raw REST call with NO body to prevent 400 Bad Request
+            $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode"
+            Invoke-MgGraphRequest -Method POST -Uri $uri -ErrorAction Stop
             $OutputText.Text = "UHDC: Mobile unlock command dispatched."
         } catch {
+            # FIX: Removed the custom error wrapper so you see the EXACT error Intune is returning
             $OutputText.Text = "Unlock failed: $(Get-GraphError $_)"
         }
     }
@@ -650,7 +652,9 @@ $BtnAddPhone.Add_Click({
         $OutputText.Text = "UHDC: Adding $newPhone to account..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            New-MgUserAuthenticationPhoneMethod -UserId $script:ResolvedUser.Id -PhoneType "mobile" -PhoneNumber $newPhone -ErrorAction Stop
+            $body = @{ phoneNumber = $newPhone; phoneType = "mobile" } | ConvertTo-Json -Compress
+            Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/users/$($script:ResolvedUser.Id)/authentication/phoneMethods" -Body $body -ContentType "application/json" -ErrorAction Stop
+
             $OutputText.Text = "[UHDC] Success: $newPhone added as primary SMS MFA."
             $InputPhone.Text = ""
         } catch { $OutputText.Text = "Error: $(Get-GraphError $_)" }
