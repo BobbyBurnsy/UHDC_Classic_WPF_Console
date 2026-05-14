@@ -2,8 +2,8 @@
 # Provides a themed GUI interface to manage and silently deploy software to a 
 # remote target using PsExec (SYSTEM context). Supports saving commonly used 
 # application UNC paths and silent installation arguments to a central JSON library.
-# Automatically detects .msix/.appx packages, adapts the GUI prompts, and routes 
-# them through a Base64-encoded Add-AppxPackage command for bulletproof execution.
+# Automatically detects .msix/.appx packages and routes them through a Base64-encoded 
+# Add-AppxProvisionedPackage command for enterprise-grade deployment.
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
@@ -251,7 +251,7 @@ while ($true) {
 
             $cleanPath = $p.Trim(" `"'")
             if ($cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$') {
-                $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPath) or leave blank:`n(Note: -AllUsers is applied automatically)"
+                $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPackagePath) or leave blank:`n(Note: -Online and -SkipLicense are applied automatically)"
             } else {
                 $a = Show-ThemedInputBox -Title "UHDC Add App" -Prompt "Enter silent switches (e.g., /S /q):" -DefaultText "/S"
             }
@@ -293,7 +293,7 @@ while ($true) {
 
             $cleanPath = $path.Trim(" `"'")
             if ($cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$') {
-                $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPath) or leave blank:`n(Note: -AllUsers is applied automatically)"
+                $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "MSIX Detected. Enter extra PowerShell parameters (e.g. -DependencyPackagePath) or leave blank:`n(Note: -Online and -SkipLicense are applied automatically)"
             } else {
                 $args = Show-ThemedInputBox -Title "UHDC Custom Install" -Prompt "Enter silent switches (e.g., /S /q):"
             }
@@ -326,8 +326,8 @@ if ($installer) {
             $isMsix = $cleanPath -match '\.(msix|appx|msixbundle|appxbundle)$'
 
             if ($isMsix) {
-                # Build the PowerShell command for modern apps
-                $psCommand = "Add-AppxPackage -Path `"$cleanPath`" -AllUsers"
+                # Build the DISM provisioning command for modern apps
+                $psCommand = "Add-AppxProvisionedPackage -Online -PackagePath `"$cleanPath`" -SkipLicense"
 
                 # Append any extra parameters the user provided (ignoring legacy EXE switches)
                 if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
@@ -335,7 +335,7 @@ if ($installer) {
                 }
 
                 Wait-TrainingStep `
-                    -Desc "STEP 1: SILENT MSIX DEPLOYMENT`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine.`n`nWHAT IT DOES:`nBecause MSIX packages are installed per-user by default, we use PsExec to launch a hidden PowerShell session as the SYSTEM account. We then execute the 'Add-AppxPackage' cmdlet with the '-AllUsers' flag, which provisions the modern app for everyone on the machine. To prevent syntax errors with network paths, the command is Base64 encoded before execution.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated PowerShell window and typing 'Add-AppxPackage -Path `"\\server\share\app.msix`" -AllUsers'." `
+                    -Desc "STEP 1: SILENT MSIX PROVISIONING`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nBecause MSIX packages are installed per-user by default, we use PsExec to launch a hidden PowerShell session as the SYSTEM account. We then execute the 'Add-AppxProvisionedPackage' cmdlet (which hooks into DISM). This provisions the modern app into the Windows image, ensuring that the current user gets it, AND any new user who logs into the PC in the future will automatically get it. To prevent syntax errors with network paths, the command is Base64 encoded before execution.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated PowerShell window and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"\\server\share\app.msix`" -SkipLicense'." `
                     -Code "psexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
 
                 # Encode the command to prevent cmd.exe from mangling quotes in the UNC path
