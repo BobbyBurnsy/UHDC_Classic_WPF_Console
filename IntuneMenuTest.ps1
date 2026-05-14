@@ -293,7 +293,8 @@ if (-not (Get-MgContext -ErrorAction SilentlyContinue)) {
 
         <ListBox Grid.Row="2" Name="DeviceList" Background="%%BG_SEC%%" Foreground="%%ACC_PRI%%" FontSize="14" BorderBrush="#555555" BorderThickness="1" Margin="0,0,0,10" SelectionMode="Single"/>
 
-        <TextBlock Grid.Row="3" Name="OutputText" Text="Select a device to see available actions." Foreground="%%ACC_SEC%%" TextWrapping="Wrap" Margin="0,10,0,10"/>
+        <!-- FIX: Changed from TextBlock to TextBox to allow selecting and copying text. Added Consolas font and increased size. -->
+        <TextBox Grid.Row="3" Name="OutputText" Text="Select a device to see available actions." Foreground="%%ACC_SEC%%" Background="Transparent" BorderThickness="0" TextWrapping="Wrap" Margin="0,10,0,10" FontFamily="Consolas" FontSize="16" IsReadOnly="True"/>
 
         <GroupBox Grid.Row="4" Header="User Authentication Methods (MFA)" Foreground="#AAAAAA" BorderBrush="#333333" Padding="0">
             <Border BorderThickness="4,0,0,0" BorderBrush="%%ACC_PRI%%" Background="%%BG_SEC%%" Padding="10">
@@ -506,7 +507,6 @@ $BtnLAPS.Add_Click({
     }
 
     try {
-        # FIX: Using the correct -DeviceLocalCredentialInfoId parameter instead of the invalid -Filter parameter
         $lapsData = Get-MgDirectoryDeviceLocalCredential -DeviceLocalCredentialInfoId $aadId -Property "credentials" -ErrorAction Stop
 
         if ($lapsData -and $lapsData.Credentials) {
@@ -545,7 +545,6 @@ $BtnUnlock.Add_Click({
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
         try {
-            # Added ContentType to ensure strict REST compliance for empty POST requests
             $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode"
             Invoke-MgGraphRequest -Method POST -Uri $uri -ContentType "application/json" -ErrorAction Stop
 
@@ -553,9 +552,8 @@ $BtnUnlock.Add_Click({
         } catch {
             $OutputText.Text = "Unlock failed: $(Get-GraphError $_)"
 
-            # Add a helpful hint to the console if it fails
             if ($OutputText.Text -match "BadRequest" -or $OutputText.Text -match "NotSupported") {
-                $OutputText.Text += "`n(Hint: Apple requires 'Supervised' mode to remove passcodes. Android BYOD blocks device-level unlocks.)"
+                $OutputText.Text += "`r`n(Hint: Apple requires 'Supervised' mode to remove passcodes. Android BYOD blocks device-level unlocks.)"
             }
         }
     }
