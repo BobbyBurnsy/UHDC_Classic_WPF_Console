@@ -331,58 +331,90 @@ if ($installer) {
                 throw "Source file cannot be found or accessed: $cleanPath"
             }
 
-            Write-Host "  > [UHDC] Staging package to target's local drive (Bypassing Double-Hop)..."
-
-            # Setup staging paths
+            # 2. Setup Staging Variables
             $stagingDir = "\\$Target\c$\Temp\UHDC_Staging"
             $fileName = Split-Path $cleanPath -Leaf
             $stagingFile = "$stagingDir\$fileName"
             $localTargetFile = "C:\Temp\UHDC_Staging\$fileName"
 
-            # 2. Create Directory and Copy File
+            # 3. Create Directory and Copy File
             if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
 
-            Write-Host "  > [UHDC] Transferring file over network (This may take a moment for large files)..."
-            Copy-Item -Path $cleanPath -Destination $stagingFile -Force -ErrorAction Stop
+            $fileSizeMB = [math]::Round((Get-Item $cleanPath).Length / 1MB, 2)
+            Write-Host "  > [UHDC] Transferring $fileName ($fileSizeMB MB) to target..."
 
-            # 3. Verify Transfer
+            $transferTime = Measure-Command {
+                Copy-Item -Path $cleanPath -Destination $stagingFile -Force -ErrorAction Stop
+            }
+
+            # 4. Verify Transfer
             if (-not (Test-Path $stagingFile)) {
                 throw "Verification failed: The file did not successfully copy to $stagingFile"
             }
+            Write-Host "  > [UHDC] Transfer complete in $($transferTime.TotalSeconds.ToString('0.0')) seconds."
 
-            # Build the PowerShell command wrapped in a Try/Catch to prevent CLIXML errors
+            # 5. Build the PowerShell execution payload
+            $argString = if (-not [string]::IsNullOrWhiteSpace($installer.Args)) { $installer.Args } else { "" }
+
             if ($isMsix) {
-                $psCommand = "try { Add-AppxProvisionedPackage -Online -PackagePath `"$localTargetFile`" -SkipLicense"
-                if (-not [string]::IsNullOrWhiteSpace($installer.Args) -and $installer.Args -notmatch '^/([Sqx]|qn|quiet|norestart)') {
-                    $psCommand += " $($installer.Args)"
-                }
-                $psCommand += " -ErrorAction Stop | Out-Null; Write-Output '[SUCCESS] MSIX Provisioned Successfully.' } catch { Write-Output `"[ERROR] MSIX Install Failed: `$(`$_.Exception.Message)`" }; Start-Sleep -Seconds 5; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
+                # Strip legacy exe/msi silent switches if accidentally provided for MSIX
+                $argString = $argString -replace '(?i)^/([Sqx]|qn|quiet|norestart)\s*', ''
 
-                Wait-TrainingStep `
-                    -Desc "STEP 1: STAGE & PROVISION MSIX`n`nWHEN TO USE THIS:`nUse this when deploying modern Windows Store apps (.msix or .appx) to a remote machine in an enterprise environment.`n`nWHAT IT DOES:`nFirst, we copy the .msix file to the target's C:\Temp folder. This bypasses the 'Double-Hop' issue where the remote SYSTEM account gets blocked from accessing network shares. Then, we use PsExec to launch a hidden PowerShell session as SYSTEM and execute 'Add-AppxProvisionedPackage'. This provisions the app into the Windows image so all current and future users get it. Finally, it deletes the temp file.`n`nIN-PERSON EQUIVALENT:`nCopying the file to the C: drive, opening an elevated PowerShell window, and typing 'Add-AppxProvisionedPackage -Online -PackagePath `"C:\Temp\app.msix`" -SkipLicense'." `
-                    -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
-
+                $psCommand = @"
+try {
+    Add-AppxProvisionedPackage -Online -PackagePath "$localTargetFile" -SkipLicense $argString -ErrorAction Stop | Out-Null
+    Write-Output "[SUCCESS] MSIX Provisioned Successfully."
+} catch {
+    Write-Output "[ERROR] MSIX Install Failed: `$(`$_.Exception.Message)"
+} finally {
+    Remove-Item -Path "$localTargetFile" -Force -ErrorAction SilentlyContinue
+}
+"@
+            } elseif ($isMsi) {
+                $psCommand = @"
+try {
+    `$proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `\`"$localTargetFile`\`" $argString" -Wait -PassThru -NoNewWindow
+    if (`$proc.ExitCode -eq 0 -or `$proc.ExitCode -eq 3010) {
+        Write-Output "[SUCCESS] MSI Installed Successfully (Exit Code: `$(`$proc.ExitCode))."
+    } else {
+        Write-Output "[ERROR] MSI Install returned Exit Code: `$(`$proc.ExitCode)"
+    }
+} catch {
+    Write-Output "[ERROR] MSI Install Failed: `$(`$_.Exception.Message)"
+} finally {
+    Remove-Item -Path "$localTargetFile" -Force -ErrorAction SilentlyContinue
+}
+"@
             } else {
-                if ($isMsi) {
-                    $psCommand = "try { Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i `\`"$localTargetFile`\`" $($installer.Args)`" -Wait -NoNewWindow | Out-Null; Write-Output '[SUCCESS] MSI Installed Successfully.' } catch { Write-Output `"[ERROR] MSI Install Failed: `$(`$_.Exception.Message)`" }; Start-Sleep -Seconds 5; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
-                } else {
-                    $psCommand = "try { Start-Process -FilePath `"$localTargetFile`" -ArgumentList `"$($installer.Args)`" -Wait -NoNewWindow | Out-Null; Write-Output '[SUCCESS] EXE Installed Successfully.' } catch { Write-Output `"[ERROR] EXE Install Failed: `$(`$_.Exception.Message)`" }; Start-Sleep -Seconds 5; Remove-Item -Path `"$localTargetFile`" -Force -ErrorAction SilentlyContinue"
-                }
-
-                Wait-TrainingStep `
-                    -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs a standard application (like Chrome or Zoom) installed, but they do not have local administrator rights, or you want to install it in the background without interrupting their work.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then use PsExec to connect as the 'SYSTEM' account and launch a hidden PowerShell session. This session executes the installer using 'silent' command-line switches (like /S or /qn), waits for the installation to finish, and then deletes the temporary file.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
-                    -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -Command `"$psCommand`""
+                $psCommand = @"
+try {
+    `$proc = Start-Process -FilePath "$localTargetFile" -ArgumentList "$argString" -Wait -PassThru -NoNewWindow
+    if (`$proc.ExitCode -eq 0 -or `$proc.ExitCode -eq 3010) {
+        Write-Output "[SUCCESS] EXE Installed Successfully (Exit Code: `$(`$proc.ExitCode))."
+    } else {
+        Write-Output "[ERROR] EXE Install returned Exit Code: `$(`$proc.ExitCode)"
+    }
+} catch {
+    Write-Output "[ERROR] EXE Install Failed: `$(`$_.Exception.Message)"
+} finally {
+    Remove-Item -Path "$localTargetFile" -Force -ErrorAction SilentlyContinue
+}
+"@
             }
 
-            Write-Host "  > [UHDC] Installing in background... (Please wait)"
+            Wait-TrainingStep `
+                -Desc "STEP 1: STAGE & SILENT INSTALL`n`nWHEN TO USE THIS:`nUse this when a user needs an application installed, but they do not have local administrator rights, or you want to install it in the background.`n`nWHAT IT DOES:`nFirst, we copy the installer to the target's C:\Temp folder to bypass 'Double-Hop' network blocks. We then use PsExec to connect as the 'SYSTEM' account and launch a PowerShell session. This session executes the installer, waits synchronously for the installation to finish, captures the exit code, and then deletes the temporary file to clean up.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
+                -Code "Copy-Item `"$cleanPath`" `"\\$Target\c$\Temp\`"`npsexec.exe \\$Target -s powershell.exe -EncodedCommand ..."
+
+            Write-Host "  > [UHDC] Executing installer as SYSTEM... (Please wait)"
 
             # Encode the command to prevent cmd.exe from mangling quotes
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psCommand))
 
-            # Use an array for arguments to pass to the call operator (&)
-            $psexecArgs = @("/accepteula", "\\$Target", "-s", "powershell.exe", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-EncodedCommand", $encoded)
+            # Wrap in cmd.exe /c to force PsExec to wait synchronously instead of detaching
+            $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-NonInteractive", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded)
 
-            # Execute via call operator to pipe output directly to the UHDC console (prevents flashing windows)
+            # Execute via call operator to pipe output directly to the UHDC console
             $execOutput = & $psExecPath $psexecArgs 2>&1
 
             foreach ($line in $execOutput) {
