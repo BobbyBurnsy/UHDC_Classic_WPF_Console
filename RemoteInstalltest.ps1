@@ -388,12 +388,19 @@ if ($installer) {
             $argString = if (-not [string]::IsNullOrWhiteSpace($installer.Args)) { $installer.Args } else { "" }
             $scriptContent = ""
 
+            # Determine the log path based on context to ensure proper Write permissions
+            if ($runContext -eq "USER") {
+                $logPath = "`$env:TEMP\UHDC_install_log.txt"
+            } else {
+                $logPath = "C:\Temp\UHDC_Staging\install_log.txt"
+            }
+
             if ($isMsix) {
                 # Strip legacy exe/msi silent switches if accidentally provided for MSIX
                 $argString = $argString -replace '(?i)^/([Sqx]|qn|quiet|norestart)\s*', ''
 
                 $scriptContent = @"
-Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
+Start-Transcript -Path "$logPath" -Force
 `$ErrorActionPreference = 'Stop'
 try {
     Write-Output "Starting MSIX Provisioning..."
@@ -410,7 +417,7 @@ Stop-Transcript
 "@
             } elseif ($isMsi) {
                 $scriptContent = @"
-Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
+Start-Transcript -Path "$logPath" -Force
 `$ErrorActionPreference = 'Stop'
 try {
     Write-Output "Starting MSI Installation..."
@@ -431,7 +438,7 @@ Stop-Transcript
 "@
             } else {
                 $scriptContent = @"
-Start-Transcript -Path "C:\Temp\UHDC_Staging\install_log.txt" -Force
+Start-Transcript -Path "$logPath" -Force
 `$ErrorActionPreference = 'Stop'
 try {
     Write-Output "Starting EXE Installation..."
@@ -480,7 +487,7 @@ Start-ScheduledTask -TaskName `$TaskName
 while ((Get-ScheduledTask -TaskName `$TaskName).State -eq 'Running') { Start-Sleep -Seconds 2 }
 Unregister-ScheduledTask -TaskName `$TaskName -Confirm:`$false | Out-Null
 
-`$logPath = "C:\Temp\UHDC_Staging\install_log.txt"
+`$logPath = "C:\Users\$($activeUser.Split('\')[-1])\AppData\Local\Temp\UHDC_install_log.txt"
 if (Test-Path `$logPath) {
     Get-Content `$logPath | Where-Object { `$_ -match "\[SUCCESS\]|\[ERROR\]" } | Write-Output
 }
@@ -490,23 +497,24 @@ if (Test-Path `$logPath) {
 
                 Wait-TrainingStep `
                     -Desc "STEP 1: PER-USER SCHEDULED TASK INJECTION`n`nWHEN TO USE THIS:`nUse this to silently deploy per-user .exe apps (like Canva, Spotify, WebEx) directly into the active user's AppData folder without needing their password.`n`nWHAT IT DOES:`nWe use PsExec as SYSTEM to dynamically build and register a Scheduled Task on the target PC. We set the task to run as the logged-in user (Interactive Token), trigger it immediately, wait for the installation to finish in their hidden background session, and then delete the task to clean up.`n`nIN-PERSON EQUIVALENT:`nSitting at the user's desk while they are logged in, downloading the .exe, and double-clicking it." `
-                    -Code "psexec.exe \\$Target -s powershell.exe -File C:\Temp\UHDC_Staging\launcher.ps1"
+                    -Code "psexec.exe \\$Target -s -w `"C:\Temp\UHDC_Staging`" powershell.exe -File launcher.ps1"
 
-                $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", "C:\Temp\UHDC_Staging\launcher.ps1")
+                # Use -w to set the working directory to the local C: drive, preventing UNC path errors
+                $psexecArgs = @("/accepteula", "\\$Target", "-s", "-w", "C:\Temp\UHDC_Staging", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", "C:\Temp\UHDC_Staging\launcher.ps1")
 
             } elseif ($runContext -eq "TECH") {
                 Wait-TrainingStep `
                     -Desc "STEP 1: TECHNICIAN CONTEXT EXECUTION`n`nWHEN TO USE THIS:`nUse this when an installer explicitly blocks the SYSTEM account from running it, but you still want to install it silently in the background.`n`nWHAT IT DOES:`nWe use PsExec WITHOUT the '-s' switch. Because we already staged the file locally to the C: drive, we bypass the Double-Hop network block, allowing PsExec to execute the installer using your delegated network credentials.`n`nIN-PERSON EQUIVALENT:`nOpening an elevated Command Prompt on the user's PC and running the installer." `
-                    -Code "psexec.exe \\$Target powershell.exe -File `"$localScriptPath`""
+                    -Code "psexec.exe \\$Target -w `"C:\Temp\UHDC_Staging`" powershell.exe -File `"$localScriptPath`""
 
-                $psexecArgs = @("/accepteula", "\\$Target", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
+                $psexecArgs = @("/accepteula", "\\$Target", "-w", "C:\Temp\UHDC_Staging", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
 
             } else {
                 Wait-TrainingStep `
                     -Desc "STEP 1: SYSTEM CONTEXT EXECUTION`n`nWHEN TO USE THIS:`nUse this for 95% of enterprise deployments (Chrome, Adobe, Office) to install the software machine-wide for all users.`n`nWHAT IT DOES:`nWe use PsExec with the '-s' switch to connect as the 'SYSTEM' account and execute the staged install script. The script suppresses progress bars (which crash PsExec), executes the installer, waits for it to finish, and captures the exit code.`n`nIN-PERSON EQUIVALENT:`nCopying the installer to the C: drive, double-clicking it, typing in your admin credentials when prompted by UAC, and clicking 'Next' through the installation wizard." `
-                    -Code "psexec.exe \\$Target -s powershell.exe -File `"$localScriptPath`""
+                    -Code "psexec.exe \\$Target -s -w `"C:\Temp\UHDC_Staging`" powershell.exe -File `"$localScriptPath`""
 
-                $psexecArgs = @("/accepteula", "\\$Target", "-s", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
+                $psexecArgs = @("/accepteula", "\\$Target", "-s", "-w", "C:\Temp\UHDC_Staging", "cmd.exe", "/c", "powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-NonInteractive", "-File", $localScriptPath)
             }
 
             Write-Host "  > [UHDC] Executing installer... (Please wait)"
