@@ -547,34 +547,48 @@ $BtnUnlock.Add_Click({
     $dev = $script:GlobalDevices[$DeviceList.SelectedIndex]
     Wait-TrainingStep `
         -Desc "STEP 4: REMOVE MOBILE PASSCODE`n`nWHEN TO USE THIS:`nUse this when a user forgets the PIN/passcode to their company-issued iOS or Android device.`n`nWHAT IT DOES:`nWe send an MDM command through Intune to forcefully clear the lock screen passcode on the mobile device.`n`nIN-PERSON EQUIVALENT:`nLogging into the Intune portal, finding the mobile device, and clicking 'Remove passcode'." `
-        -Code "Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId `$dev.Id"
+        -Code "Invoke-MgGraphRequest -Method POST -Uri `"https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/`$(`$dev.Id)/removeDevicePasscode`""
 
     if ([System.Windows.MessageBox]::Show("Remove passcode from this mobile device?", "UHDC Confirm", "YesNo") -eq "Yes") {
         $OutputText.Text = "UHDC: Sending unlock command..."
         [System.Windows.Forms.Application]::DoEvents()
 
         try {
-            # Attempt 1: The native cmdlet handles the C# HTTP client directly, bypassing PS 5.1 quirks
-            Invoke-MgRemoveDeviceManagementManagedDevicePasscode -ManagedDeviceId $dev.Id -ErrorAction Stop
+            $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode"
+            Invoke-MgGraphRequest -Method POST -Uri $uri -ErrorAction Stop
 
             $OutputText.Text = "[UHDC] Success: Mobile unlock command dispatched."
         } catch {
-            # Attempt 2: Fallback to the stable v1.0 API (without a body, as required by MS Docs)
-            try {
-                $uri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/$($dev.Id)/removeDevicePasscode"
-                Invoke-MgGraphRequest -Method POST -Uri $uri -ErrorAction Stop
+            $errStr = $_.Exception.Message
 
-                $OutputText.Text = "[UHDC] Success: Mobile unlock command dispatched."
-            } catch {
-                # Extract the exact Microsoft error so you know WHY it's a Bad Request
-                $err = Get-GraphError $_
-
-                if ($err -match "not supported") {
-                    $OutputText.Text = "Unlock failed: Device does not support passcode removal (Likely BYOD/User Enrolled)."
-                } else {
-                    $OutputText.Text = "Unlock failed: $err"
-                }
+            # 1. Try standard Graph API Error Details
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $errStr = $_.ErrorDetails.Message
             }
+
+            # 2. Deep extraction for PS 5.1 WebExceptions to get the raw Microsoft JSON error
+            $currentEx = $_.Exception
+            while ($currentEx) {
+                if ($currentEx.GetType().Name -eq "WebException" -and $currentEx.Response) {
+                    try {
+                        $stream = $currentEx.Response.GetResponseStream()
+                        $reader = New-Object System.IO.StreamReader($stream)
+                        $rawJson = $reader.ReadToEnd()
+                        $jsonObj = $rawJson | ConvertFrom-Json
+
+                        if ($jsonObj.error.message) {
+                            $errStr = $jsonObj.error.message
+                        } else {
+                            $errStr = $rawJson
+                        }
+                    } catch {}
+                    break
+                }
+                $currentEx = $currentEx.InnerException
+            }
+
+            # Display the exact reason Intune rejected the command
+            $OutputText.Text = "Unlock failed: $errStr"
         }
     }
 })
